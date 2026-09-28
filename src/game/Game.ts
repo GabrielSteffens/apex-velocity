@@ -24,6 +24,8 @@ import { RaceHUD } from '../ui/RaceHUD';
 import { ResultsScreen } from '../ui/ResultsScreen';
 import { Countdown, Toast, LoadingScreen } from '../ui/Overlay';
 import { clamp } from '../core/math';
+import { isTouchDevice } from '../core/device';
+import { TouchControls } from '../ui/TouchControls';
 
 const MAX_STEPS_PER_FRAME = 12;
 
@@ -66,6 +68,8 @@ export class Game {
   private countdown = new Countdown();
   private toast = new Toast();
   private settingsReturn: 'menu' | 'pause' = 'menu';
+  readonly isTouch = isTouchDevice();
+  private touch: TouchControls | null = null;
   private resultsShown = false;
   private sessionKey = '';
   private lastPreset: unknown = null;
@@ -73,6 +77,27 @@ export class Game {
   constructor(private readonly container: HTMLElement, uiContainer: HTMLElement) {
     this.uiRoot = h('div', { class: 'safe' });
     uiContainer.appendChild(this.uiRoot);
+    if (this.isTouch) {
+      document.body.classList.add('is-touch');
+      this.touch = new TouchControls(this.input);
+      uiContainer.appendChild(this.touch.el);
+      document.body.appendChild(
+        h('div', {
+          class: 'rotate-hint',
+          html:
+            '<svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="18.5" r="1" fill="currentColor"/></svg>Gire o celular<small>O jogo funciona na horizontal</small>',
+        }),
+      );
+      const checkOrientation = () => {
+        const portrait = window.innerHeight > window.innerWidth;
+        document.body.classList.toggle('portrait', portrait);
+        // Turning the phone upright mid-race pauses instead of letting the car crash.
+        if (portrait && this.state.is('RACING', 'COUNTDOWN')) this.state.set('PAUSED');
+      };
+      window.addEventListener('resize', checkOrientation);
+      window.addEventListener('orientationchange', checkOrientation);
+      checkOrientation();
+    }
     this.uiRoot.append(this.loading.el);
     this.updateUIScale();
     window.addEventListener('resize', () => this.updateUIScale());
@@ -136,7 +161,7 @@ export class Game {
       trackDef,
       this.trackScene.track.length,
     );
-    this.settingsPanel = new SettingsPanel(this.settings, this.audio);
+    this.settingsPanel = new SettingsPanel(this.settings, this.audio, this.isTouch);
     this.settingsPanel.onClose = () => this.closeSettings();
     this.pause = new PauseMenu(this.audio, {
       resume: () => this.state.set(this.state.resumeState),
@@ -179,6 +204,7 @@ export class Game {
   private applySettings(): void {
     const s = this.settings.values;
     this.applyTimeOfDay();
+    void this.touch?.setSteering(s.touchSteering);
     this.renderer.setQuality(s.quality);
     this.env.setShadowQuality(s.quality === 'low' ? 1024 : 2048);
     this.env.setShadowExtent(s.quality === 'high' ? 80 : 60);
@@ -269,7 +295,22 @@ export class Game {
     for (const o of culled) o.frustumCulled = true;
   }
 
+  /** Phones: go fullscreen and lock landscape (must run from a user gesture). */
+  private enterMobileFullscreen(): void {
+    if (!this.isTouch) return;
+    const el = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => void };
+    try {
+      const req = el.requestFullscreen?.({ navigationUI: 'hide' }) ?? el.webkitRequestFullscreen?.();
+      Promise.resolve(req)
+        .then(() => (screen.orientation as unknown as { lock?: (o: string) => Promise<void> })?.lock?.('landscape'))
+        .catch(() => {});
+    } catch {
+      /* not supported (e.g. iPhone Safari): the game still works in the browser UI */
+    }
+  }
+
   private startRace(): void {
+    this.enterMobileFullscreen();
     this.audio.unlock();
     this.state.set('COUNTDOWN');
   }
@@ -304,6 +345,8 @@ export class Game {
     if (to !== 'FINISHED') show(this.results.el, false);
     if (to !== 'PAUSED') this.settingsPanel.el.classList.remove('visible');
     this.audio.setMuted(to === 'PAUSED');
+    this.touch?.setVisible(to === 'COUNTDOWN' || to === 'RACING');
+    if (to === 'COUNTDOWN' && from !== 'PAUSED') this.touch?.calibrateTilt();
     if (to === 'MENU') {
       this.audio.stopDriving();
       this.countdown.clear();

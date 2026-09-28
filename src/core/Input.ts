@@ -1,5 +1,16 @@
+/** State written by the on-screen touch controls. */
+export interface TouchState {
+  throttle: number;
+  brake: number;
+  left: boolean;
+  right: boolean;
+  handbrake: boolean;
+  /** Analog steering from device tilt (-1..1), or null when tilt steering is off. */
+  tilt: number | null;
+}
+
 /**
- * Keyboard + gamepad input. Exposes analog axes for driving and edge-triggered actions
+ * Keyboard + gamepad + touch input. Exposes analog axes for driving and edge-triggered actions
  * for menus (pause, reset, camera).
  */
 export type Action = 'pause' | 'reset' | 'camera' | 'confirm' | 'up' | 'down' | 'back' | 'debug';
@@ -21,7 +32,8 @@ export class Input {
   private gamepadPrev: boolean[] = [];
   gamepadConnected = false;
   /** Last device used, so the UI can show the right hints. */
-  lastDevice: 'keyboard' | 'gamepad' = 'keyboard';
+  lastDevice: 'keyboard' | 'gamepad' | 'touch' = 'keyboard';
+  readonly touch: TouchState = { throttle: 0, brake: 0, left: false, right: false, handbrake: false, tilt: null };
 
   constructor() {
     window.addEventListener('keydown', (e) => {
@@ -92,26 +104,32 @@ export class Input {
     return false;
   }
 
+  /** Fire an edge-triggered action from UI (e.g. an on-screen pause button). */
+  trigger(action: Action): void {
+    this.pressedActions.add(action);
+  }
+
   clearActions(): void {
     this.pressedActions.clear();
   }
 
   get throttle(): number {
-    let v = this.key('KeyW', 'ArrowUp') ? 1 : 0;
+    let v = Math.max(this.key('KeyW', 'ArrowUp') ? 1 : 0, this.touch.throttle);
     const p = this.pad();
     if (p) v = Math.max(v, p.buttons[7]?.value ?? 0);
     return v;
   }
 
   get brake(): number {
-    let v = this.key('KeyS', 'ArrowDown') ? 1 : 0;
+    let v = Math.max(this.key('KeyS', 'ArrowDown') ? 1 : 0, this.touch.brake);
     const p = this.pad();
     if (p) v = Math.max(v, p.buttons[6]?.value ?? 0);
     return v;
   }
 
   get steer(): number {
-    let v = (this.key('KeyD', 'ArrowRight') ? 1 : 0) - (this.key('KeyA', 'ArrowLeft') ? 1 : 0);
+    let v = (this.key('KeyD', 'ArrowRight') || this.touch.right ? 1 : 0) - (this.key('KeyA', 'ArrowLeft') || this.touch.left ? 1 : 0);
+    if (v === 0 && this.touch.tilt !== null) return this.touch.tilt;
     const p = this.pad();
     if (p && v === 0) {
       const x = p.axes[0] ?? 0;
@@ -127,12 +145,13 @@ export class Input {
 
   /** True when the current steering value comes from an analog stick. */
   get steerIsAnalog(): boolean {
+    if (this.touch.tilt !== null && !this.touch.left && !this.touch.right) return true;
     const p = this.pad();
     return !!p && this.key('KeyA', 'KeyD', 'ArrowLeft', 'ArrowRight') === false && Math.abs(p.axes[0] ?? 0) > 0.12;
   }
 
   get handbrake(): boolean {
-    if (this.key('Space')) return true;
+    if (this.key('Space') || this.touch.handbrake) return true;
     const p = this.pad();
     return !!p && (!!p.buttons[2]?.pressed || !!p.buttons[4]?.pressed);
   }

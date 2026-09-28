@@ -10,10 +10,20 @@ export class SettingsPanel {
   constructor(
     private readonly settings: Settings,
     private readonly audio: AudioManager,
+    touch = false,
   ) {
     const body = h('div', {});
     const render = () => {
+      const rows: HTMLElement[] = [];
+      if (touch)
+        rows.push(
+          this.choice('Touch Steering', 'touchSteering', [
+            ['buttons', 'Buttons'],
+            ['tilt', 'Tilt'],
+          ]),
+        );
       body.replaceChildren(
+        ...rows,
         this.choice('Time of Day', 'timeOfDay', [
           ['sunset', 'Sunset'],
           ['night', 'Night'],

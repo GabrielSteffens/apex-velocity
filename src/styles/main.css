@@ -796,3 +796,289 @@ body {
   font-variant-numeric: tabular-nums;
   user-select: text;
 }
+
+/* ================================================================ Mobile / touch */
+html,
+body {
+  /* No pinch-zoom, double-tap zoom, pull-to-refresh or rubber-banding over the game. */
+  touch-action: none;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+}
+.panel {
+  touch-action: pan-y; /* settings / results can still scroll */
+  -webkit-overflow-scrolling: touch;
+}
+
+.touch-controls {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s;
+  z-index: 5;
+  --tc: min(19vmin, 120px);
+}
+.touch-controls.visible {
+  opacity: 1;
+  visibility: visible;
+}
+.tc-btn {
+  pointer-events: auto;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(12, 13, 17, 0.42);
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  transition: background 0.08s, transform 0.08s, border-color 0.08s;
+  font-family: var(--display);
+  font-style: italic;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  user-select: none;
+}
+.tc-btn svg {
+  width: 46%;
+  height: 46%;
+}
+.tc-btn.on {
+  background: rgba(255, 59, 47, 0.62);
+  border-color: rgba(255, 255, 255, 0.7);
+  transform: scale(0.94);
+}
+.tc-steer {
+  position: absolute;
+  left: max(16px, env(safe-area-inset-left));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  gap: calc(var(--tc) * 0.22);
+}
+.tc-left,
+.tc-right {
+  width: var(--tc);
+  height: var(--tc);
+  border-radius: 50%;
+}
+.touch-controls.tilt .tc-steer {
+  display: none;
+}
+.tc-pedals {
+  position: absolute;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-rows: auto auto;
+  gap: calc(var(--tc) * 0.16);
+  align-items: end;
+}
+.tc-hand {
+  grid-column: 1;
+  grid-row: 1;
+  width: calc(var(--tc) * 0.95);
+  height: calc(var(--tc) * 0.5);
+  border-radius: 12px;
+  font-size: calc(var(--tc) * 0.17);
+}
+.tc-brake {
+  grid-column: 1;
+  grid-row: 2;
+  width: calc(var(--tc) * 0.95);
+  height: calc(var(--tc) * 0.95);
+  border-radius: 16px;
+  font-size: calc(var(--tc) * 0.16);
+}
+.tc-gas {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: calc(var(--tc) * 1.05);
+  height: calc(var(--tc) * 1.6);
+  border-radius: 18px;
+  font-size: calc(var(--tc) * 0.2);
+  background: rgba(20, 163, 127, 0.3);
+}
+.tc-gas.on {
+  background: rgba(20, 200, 140, 0.65);
+}
+.tc-top {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  right: calc(max(10px, env(safe-area-inset-right)) + min(25vmin, 150px));
+  display: flex;
+  gap: 10px;
+}
+.tc-small {
+  width: calc(var(--tc) * 0.46);
+  height: calc(var(--tc) * 0.46);
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: 10px;
+}
+
+/* Rotate-your-device prompt */
+.rotate-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: #0b0c10;
+  color: var(--ink);
+  font-family: var(--display);
+  font-style: italic;
+  font-weight: 900;
+  font-size: 26px;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 24px;
+  pointer-events: auto;
+}
+.rotate-hint small {
+  font-family: var(--body);
+  font-style: normal;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.15em;
+  color: var(--ink-dim);
+}
+.rotate-hint svg {
+  width: 90px;
+  height: 90px;
+  color: var(--accent);
+  animation: rotate-phone 1.8s ease-in-out infinite;
+}
+@keyframes rotate-phone {
+  0%,
+  20% {
+    transform: rotate(0deg);
+  }
+  60%,
+  100% {
+    transform: rotate(-90deg);
+  }
+}
+body.is-touch.portrait .rotate-hint {
+  display: flex;
+}
+
+/* Touch devices: HUD and menu adapted to small landscape screens */
+body.is-touch .hud .hints,
+body.is-touch .menu .footer {
+  display: none;
+}
+body.is-touch .speedo {
+  /* right side, above the pedals — keeps the car itself unobstructed */
+  right: max(10px, env(safe-area-inset-right));
+  bottom: calc(min(19vmin, 120px) * 1.6 + 26px);
+  width: min(30vmin, 150px);
+  height: min(30vmin, 150px);
+}
+body.is-touch .standings .row:nth-child(n + 4):not(.me) {
+  display: none; /* top 3 + you */
+}
+@media (max-height: 520px) {
+  .menu .cards {
+    display: none;
+  }
+  .menu .logo {
+    font-size: 44px;
+  }
+  .menu .left {
+    left: max(24px, env(safe-area-inset-left));
+    gap: 14px;
+  }
+  .menu-btn {
+    min-width: 260px;
+    font-size: 17px;
+    padding: 8px 16px;
+  }
+  .menu-btn.primary {
+    font-size: 22px;
+    padding: 10px 16px;
+  }
+  .menu .version {
+    top: 8px;
+    right: 12px;
+    font-size: 10px;
+  }
+  .panel {
+    padding: 16px 20px;
+    min-width: 0;
+    width: min(92vw, 640px);
+    max-height: 94vh;
+  }
+  .panel h2 {
+    font-size: 30px;
+    margin-bottom: 10px;
+  }
+  .setting {
+    padding: 6px 0;
+    font-size: 13px;
+    gap: 10px;
+  }
+  .setting .opt {
+    padding: 5px 9px;
+    font-size: 12px;
+  }
+  .panel .menu-list .menu-btn {
+    min-width: 0;
+    width: 100%;
+  }
+  .results .headline {
+    font-size: 44px;
+  }
+  .results table {
+    font-size: 12px;
+  }
+  .results td {
+    padding: 4px 8px;
+  }
+  .countdown {
+    font-size: 120px;
+  }
+  .toast {
+    font-size: 38px;
+  }
+  .standings {
+    top: 92px;
+    min-width: 170px;
+  }
+  .standings .row {
+    font-size: 12px;
+    padding: 2px 8px;
+  }
+  .hud .tl {
+    top: 10px;
+    left: max(12px, env(safe-area-inset-left));
+  }
+  .hud-big {
+    font-size: 34px;
+  }
+  .hud .timer {
+    top: 8px;
+  }
+  .hud .timer .main {
+    font-size: 24px;
+  }
+  .hud .timer .rows {
+    font-size: 10px;
+    gap: 8px;
+  }
+  .minimap {
+    top: 8px;
+    right: max(8px, env(safe-area-inset-right));
+    width: min(25vmin, 150px);
+    height: min(25vmin, 150px);
+  }
+  .wrongway {
+    font-size: 24px;
+  }
+}

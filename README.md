@@ -35,6 +35,13 @@ Other scripts:
 | Pause | Esc / P | Start |
 | Menu navigation | ↑ ↓ Enter | D-pad, A, B |
 
+**Phones and tablets** get on-screen controls automatically (◀ ▶ on the left; handbrake, brake and
+gas on the right; reset / camera / pause at the top), with multi-touch and finger sliding between
+buttons. Settings → Touch Steering switches to **tilt steering** (calibrated at every race start).
+The game goes fullscreen in landscape when a race starts (where the browser allows it), pauses if
+the phone is turned upright, and starts on Medium graphics. Add `?touch=1` to the URL to preview the
+touch UI on a desktop browser.
+
 ## Architecture
 
 ```

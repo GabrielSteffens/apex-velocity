@@ -1,5 +1,6 @@
 import type { Quality } from '../render/Renderer';
 import type { TimeOfDay } from '../data/types';
+import { isTouchDevice } from './device';
 
 export type Difficulty = 'easy' | 'normal' | 'hard';
 
@@ -12,6 +13,8 @@ export interface GameSettings {
   cameraShake: boolean;
   showFps: boolean;
   timeOfDay: TimeOfDay;
+  /** Touch devices: on-screen arrow buttons or tilting the device. */
+  touchSteering: 'buttons' | 'tilt';
 }
 
 const DEFAULTS: GameSettings = {
@@ -23,6 +26,7 @@ const DEFAULTS: GameSettings = {
   cameraShake: true,
   showFps: false,
   timeOfDay: 'night',
+  touchSteering: 'buttons',
 };
 
 const KEY = 'apex-velocity.settings.v1';
@@ -39,7 +43,9 @@ export class Settings {
     } catch {
       stored = {};
     }
-    this.data = { ...DEFAULTS, ...stored };
+    // Phones/tablets start on Medium graphics; the dynamic resolution handles the rest.
+    const deviceDefaults: Partial<GameSettings> = isTouchDevice() ? { quality: 'medium' } : {};
+    this.data = { ...DEFAULTS, ...deviceDefaults, ...stored };
   }
 
   get values(): Readonly<GameSettings> {
