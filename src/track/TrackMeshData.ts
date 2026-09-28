@@ -96,7 +96,7 @@ export function roadProfile(halfWidth: number): RibbonProfile {
   const w = halfWidth;
   return {
     laterals: [-w - 0.5, -w, -w * 0.5, 0, w * 0.5, w, w + 0.5],
-    heights: [-0.07, 0, 0.01, 0.015, 0.01, 0, -0.07],
+    heights: [-0.06, 0, 0.01, 0.015, 0.01, 0, -0.06],
     us: [-0.5 / (2 * w), 0, 0.25, 0.5, 0.75, 1, 1 + 0.5 / (2 * w)],
   };
 }

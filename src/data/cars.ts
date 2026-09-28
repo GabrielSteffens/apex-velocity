@@ -27,7 +27,7 @@ export const cars: CarDefinition[] = [
       wheelRadius: 0.34,
     },
     suspension: {
-      restLength: 0.44,
+      restLength: 0.52,
       frequency: 1.9,
       damping: 0.45,
       antiRoll: 9000,

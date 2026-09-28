@@ -9,6 +9,8 @@ export interface CarInput {
   brake: number; // 0..1 (also reverse when stopped)
   steer: number; // -1 (left) .. 1 (right)
   handbrake: boolean;
+  /** True when steer comes from an analog stick (already smooth: less filtering needed). */
+  analog?: boolean;
 }
 
 export interface WheelState {
@@ -41,7 +43,7 @@ const LOCAL_FORWARD = new THREE.Vector3(0, 0, 1);
 const LOCAL_UP = new THREE.Vector3(0, 1, 0);
 const LOCAL_RIGHT = new THREE.Vector3(-1, 0, 0);
 /** Height of the suspension top mounts in body space. */
-const WHEEL_MOUNT_Y = 0.05;
+const WHEEL_MOUNT_Y = 0.13;
 
 const _q = new THREE.Quaternion();
 const _pos = new THREE.Vector3();
@@ -135,7 +137,10 @@ export class CarPhysics {
     for (let i = 0; i < def.gearCount; i++) this.gearTop.push(this.topSpeed * (ratios[i] ?? 1.02));
 
     const yaw = Math.atan2(heading.x, heading.z);
-    this.comHeight = -0.28;
+    // Centre of mass at the height of the chassis collider's centre: side impacts against
+    // walls/cars then push through the COM instead of levering the car up onto the wall.
+    // Rollover stability comes from applying tyre forces close to COM height (below).
+    this.comHeight = 0.02;
     const bodyDesc = R.RigidBodyDesc.dynamic()
       .setTranslation(position.x, position.y, position.z)
       .setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) })
@@ -147,9 +152,11 @@ export class CarPhysics {
         def.mass,
         { x: 0, y: this.comHeight, z: 0.05 },
         {
-          x: (def.mass / 12) * (0.9 ** 2 + d.length ** 2) * 1.1,
+          // Pitch and roll inertia are raised well above a real car's: impacts and curbs then
+          // nudge the body instead of flicking it. Visual body motion is added in CarVisual.
+          x: (def.mass / 12) * (0.9 ** 2 + d.length ** 2) * 2.2,
           y: (def.mass / 12) * (d.width ** 2 + d.length ** 2),
-          z: (def.mass / 12) * (d.width ** 2 + 0.9 ** 2) * 1.6,
+          z: (def.mass / 12) * (d.width ** 2 + 0.9 ** 2) * 4,
         },
         { x: 0, y: 0, z: 0, w: 1 },
       );
@@ -276,7 +283,13 @@ export class CarPhysics {
     const inp = this.input;
     const enabled = this.enabled;
     const steerTarget = enabled ? clamp(inp.steer, -1, 1) : 0;
-    const steerRate = Math.abs(steerTarget) < Math.abs(this.steerInput) || Math.sign(steerTarget) !== Math.sign(this.steerInput) ? 5.5 : lerp(2.6, 4.2, def.handling);
+    // Digital (keyboard) steering ramps in quickly at low speed and more gently at high
+    // speed; releasing returns to centre faster than turning in. Analog sticks are already
+    // smooth, so they get a much lighter filter (less input lag).
+    const speedT = clamp(Math.abs(fwdSpeed) / 50, 0, 1);
+    const returning = Math.abs(steerTarget) < Math.abs(this.steerInput) || Math.sign(steerTarget) !== Math.sign(this.steerInput);
+    let steerRate = returning ? lerp(8, 6, speedT) : lerp(6.5, 3.4, speedT) * lerp(0.85, 1.1, def.handling);
+    if (inp.analog) steerRate *= 3;
     this.steerInput = moveTowards(this.steerInput, steerTarget, steerRate * dt);
     this.steerAngle = this.steerInput * this.maxSteerAngle(fwdSpeed);
 
@@ -383,11 +396,13 @@ export class CarPhysics {
         }
         wh.contact.set(_origin.x - _up.x * hit.timeOfImpact, _origin.y - _up.y * hit.timeOfImpact, _origin.z - _up.z * hit.timeOfImpact);
         wh.normal.set(hit.normal.x, hit.normal.y, hit.normal.z);
-        const compVel = (wh.compression - wh.prevCompression) / dt;
+        // Clamp the damper velocity: stepping onto a 5 cm curb within one physics step would
+        // otherwise read as 6 m/s of compression and kick the car into the air.
+        const compVel = clamp((wh.compression - wh.prevCompression) / dt, -1.5, 1.5);
         let force = this.springK * wh.compression + this.damperC * compVel + roughF;
-        // Bump stop
-        if (wh.suspension < 0.06) force += (0.06 - wh.suspension) * this.springK * 6;
-        force = Math.max(0, force);
+        // Progressive bump stop
+        if (wh.suspension < 0.07) force += Math.min(0.05, 0.07 - wh.suspension) * this.springK * 3;
+        force = Math.min(Math.max(0, force), this.mass * 9.81 * 2.2);
         wh.load = force;
         _f.copy(_up).multiplyScalar(force * dt);
         body.applyImpulseAtPoint(_f, _origin, true);
@@ -402,7 +417,9 @@ export class CarPhysics {
       }
     }
     this.groundedWheels = grounded;
-    this.surface = surfaceGrass >= 2 ? 'grass' : this.wheels.some((w) => w.grounded && w.surface === 'curb') ? 'curb' : 'asphalt';
+    let onCurb = false;
+    for (const w of this.wheels) if (w.grounded && w.surface === 'curb') onCurb = true;
+    this.surface = surfaceGrass >= 2 ? 'grass' : onCurb ? 'curb' : 'asphalt';
 
     // Anti-roll bars
     for (let axle = 0; axle < 2; axle++) {
@@ -500,7 +517,7 @@ export class CarPhysics {
       wh.slipLong = slipLong;
 
       // Apply at contact point raised towards the centre of mass to reduce body roll.
-      _pt.copy(wh.contact).addScaledVector(_up, (_com.dot(_up) - wh.contact.dot(_up)) * 0.72);
+      _pt.copy(wh.contact).addScaledVector(_up, (_com.dot(_up) - wh.contact.dot(_up)) * 0.86);
       _f.copy(_wFwd).multiplyScalar(fLong * dt).addScaledVector(_wSide, fLat * dt);
       body.applyImpulseAtPoint(_f, _pt, true);
 
@@ -547,6 +564,24 @@ export class CarPhysics {
       const esc = handbrake ? 0 : clamp((bodySlip - 0.05) / 0.2, 0, 1);
       const assist = handbrake ? 0.1 : 0.35 + esc * 1.4;
       body.applyTorqueImpulse(_f.copy(_up).multiplyScalar(-yawRate * this.mass * assist * dt), true);
+
+      // Roll/pitch damping while on the ground: bumps and impacts settle instead of
+      // rocking the chassis (the suspension springs still do their job).
+      _axis.copy(_w).addScaledVector(_up, -yawRate);
+      body.applyTorqueImpulse(_axis.multiplyScalar(-this.mass * 2.2 * dt), true);
+
+
+    }
+    // Impacts must never fling the car into a spin: cap yaw rate (handbrake drifts exempt),
+    // on the ground and in the air.
+    {
+      const w = body.angvel();
+      const yr = w.x * _up.x + w.y * _up.y + w.z * _up.z;
+      const maxYaw = handbrake ? 4 : 2.6;
+      if (Math.abs(yr) > maxYaw) {
+        const excess = yr - Math.sign(yr) * maxYaw;
+        body.setAngvel({ x: w.x - _up.x * excess, y: w.y - _up.y * excess, z: w.z - _up.z * excess }, true);
+      }
     }
     if (_up.y < 0.25) this.upsideDownTime += dt;
     else this.upsideDownTime = 0;

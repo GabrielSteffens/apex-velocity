@@ -189,7 +189,7 @@ export class Renderer {
     if (next !== this.renderScale) {
       if (next < this.renderScale) {
         // Upscaled and immediately had to come back down: stop oscillating for a while.
-        if (this.clock - this.lastDownscaleAt < 20) this.upscaleLock = this.clock + 60;
+        if (this.clock - this.lastDownscaleAt < 20) this.upscaleLock = this.clock + 25;
         this.lastDownscaleAt = this.clock;
       }
       this.renderScale = next;

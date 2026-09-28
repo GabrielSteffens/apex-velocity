@@ -1,7 +1,7 @@
 {
   "name": "apex-velocity",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tools",
     "sim": "tsx tools/sim-test.ts",
     "track-check": "tsx tools/track-check.ts",
-    "skidpad": "tsx tools/skidpad.ts"
+    "skidpad": "tsx tools/skidpad.ts",
+    "drive-test": "tsx tools/drive-test.ts",
+    "fps-test": "tsx tools/fps-consistency.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",

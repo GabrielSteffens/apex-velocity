@@ -50,9 +50,10 @@ export class Terrain {
         if (idx >= 0) {
           const p = track.project(x, z, idx);
           dist = p.distance;
-          const roadH = p.height - 0.14;
-          // Slight dish shape on the runoff so it reads like real ground, not a table top.
-          const runoff = roadH - smoothstep(track.halfWidth + 1, flat, dist) * 0.25;
+          // Terrain sits just under the road edge (no step for the wheels to drop off) and
+          // dishes away gently across the runoff.
+          const roadH = p.height - 0.07;
+          const runoff = roadH - smoothstep(track.halfWidth + 1, flat, dist) * 0.15;
           const t = smoothstep(flat, flat + blend, dist);
           h = lerp(runoff, natural, t);
         }

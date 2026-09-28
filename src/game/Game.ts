@@ -75,6 +75,11 @@ export class Game {
     this.uiRoot.append(this.loading.el);
     this.updateUIScale();
     window.addEventListener('resize', () => this.updateUIScale());
+    // Coming back to the tab: drop the time that passed while hidden (no physics catch-up burst).
+    document.addEventListener('visibilitychange', () => {
+      this.accumulator = 0;
+      this.lastTime = performance.now();
+    });
   }
 
   private updateUIScale(): void {
@@ -176,6 +181,11 @@ export class Game {
     this.env.setShadowExtent(s.quality === 'high' ? 80 : 60);
     this.audio.setVolume(s.volume);
     this.hud.showFps = s.showFps;
+    if (s.showFps) {
+      let objects = 0;
+      this.scene.traverse(() => objects++);
+      this.hud.debug.objects = objects;
+    }
     this.chase.shakeEnabled = s.cameraShake;
     this.updateUIScale();
     // Grid preview reflects the chosen opponent count while in the menu.
@@ -306,7 +316,8 @@ export class Game {
 
   private loop = (now: number): void => {
     requestAnimationFrame(this.loop);
-    const frameMs = now - this.lastTime;
+    const frameStart = performance.now();
+    const frameMs = Math.max(0, now - this.lastTime);
     const dt = Math.min(0.1, frameMs / 1000) * this.timeScale;
     if (!this.state.is('LOADING', 'PAUSED')) this.renderer.adaptResolution(frameMs, dt);
     this.lastTime = now;
@@ -321,12 +332,16 @@ export class Game {
     if (simulate) {
       this.accumulator += dt;
       let steps = 0;
+      const tPhys = performance.now();
       while (this.accumulator >= fixed && steps < MAX_STEPS_PER_FRAME) {
         session.fixedStep(fixed);
         this.accumulator -= fixed;
         steps++;
       }
-      if (steps === MAX_STEPS_PER_FRAME) this.accumulator = 0;
+      // Couldn't keep up (very slow frame): drop the backlog rather than spiral.
+      if (steps === MAX_STEPS_PER_FRAME) this.accumulator = Math.min(this.accumulator, fixed);
+      this.hud.debug.physicsMs = performance.now() - tPhys;
+      this.hud.debug.physicsSteps = steps;
     }
     const alpha = simulate ? this.accumulator / fixed : 1;
     session.frameUpdate(simulate ? dt : 0, alpha);
@@ -360,10 +375,13 @@ export class Game {
     const speedFx = player && this.chase.mode !== 'hood' && !this.state.is('MENU') ? clamp((player.physics.speed - 28) / 45, 0, 1) * 0.8 : 0;
     this.renderer.render(speedFx, this.elapsed);
     this.hud.renderStats = this.renderer.stats;
+    this.hud.debug.frameMs = frameMs;
+    this.hud.debug.cpuMs = performance.now() - frameStart;
   };
 
   private handleActions(): void {
     const st = this.state;
+    if (this.input.consume('debug')) this.settings.set('showFps', !this.settings.values.showFps);
     if (st.is('MENU')) {
       if (!this.settingsPanel.el.classList.contains('visible')) this.menu.handleInput(this.input);
       else if (this.input.consume('pause') || this.input.consume('back')) this.closeSettings();

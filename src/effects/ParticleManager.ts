@@ -185,7 +185,7 @@ export class ParticleManager {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     this.motes = new THREE.Points(
       g,
-      new THREE.PointsMaterial({ color: 0xffe2b0, size: 0.07, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending }),
+      new THREE.PointsMaterial({ color: 0xffe2b0, size: 0.045, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.AdditiveBlending }),
     );
     this.motes.frustumCulled = false;
     this.group.add(this.motes);
@@ -194,7 +194,8 @@ export class ParticleManager {
   /** Tint smoke/dust by the ambient light of the current time of day. */
   setLight(color: number, night: boolean): void {
     for (const pool of [this.smoke]) (pool.points.material as THREE.ShaderMaterial).uniforms.uLight.value.setHex(color);
-    (this.motes.material as THREE.PointsMaterial).opacity = night ? 0.25 : 0.55;
+    // Sunlit pollen only makes sense at golden hour; at night near-camera motes read as blobs.
+    this.motes.visible = !night;
   }
 
   setViewportHeight(h: number, fovDeg: number): void {

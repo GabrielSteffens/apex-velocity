@@ -13,8 +13,66 @@ export interface TrackColliderSet {
   barrierHandles: Set<number>;
 }
 
-const BARRIER_HALF_HEIGHT = 1.7;
-const BARRIER_HALF_THICKNESS = 0.35;
+/** Wall cross-section (outward offset, height) — taller than the visual barrier so cars can't vault it. */
+const WALL_PROFILE: [number, number][] = [
+  [0, -0.6],
+  [0, 2.8],
+  [0.8, 2.8],
+  [0.8, -0.6],
+];
+
+/**
+ * Closed prism swept along a barrier polyline with mitred joints. Faces wind outward
+ * (required by FIX_INTERNAL_EDGES, which also merges the shared vertices).
+ */
+function barrierMesh(points: { x: number; y: number; z: number }[], side: 1 | -1): { vertices: Float32Array; indices: Uint32Array } | null {
+  const n = points.length;
+  if (n < 2) return null;
+  const m = WALL_PROFILE.length;
+  const verts = new Float32Array(n * m * 3);
+  for (let i = 0; i < n; i++) {
+    const a = points[Math.max(0, i - 1)];
+    const b = points[Math.min(n - 1, i + 1)];
+    let dx = b.x - a.x;
+    let dz = b.z - a.z;
+    const len = Math.hypot(dx, dz) || 1;
+    dx /= len;
+    dz /= len;
+    // Outward normal (away from the track).
+    const nx = -dz * side;
+    const nz = dx * side;
+    const p = points[i];
+    for (let k = 0; k < m; k++) {
+      const [o, h] = WALL_PROFILE[k];
+      const q = (i * m + k) * 3;
+      verts[q] = p.x + nx * o;
+      verts[q + 1] = p.y + h;
+      verts[q + 2] = p.z + nz * o;
+    }
+  }
+  const idx: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    for (let k = 0; k < m; k++) {
+      const k2 = (k + 1) % m;
+      const a0 = i * m + k;
+      const a1 = i * m + k2;
+      const b0 = (i + 1) * m + k;
+      const b1 = (i + 1) * m + k2;
+      if (side === 1) idx.push(a0, a1, b0, a1, b1, b0);
+      else idx.push(a0, b0, a1, a1, b0, b1);
+    }
+  }
+  // End caps
+  const cap = (i: number, flip: boolean) => {
+    const base = i * m;
+    const tri = [base, base + 1, base + 2, base, base + 2, base + 3];
+    const outward = (side === 1) !== flip;
+    idx.push(...(outward ? tri : [tri[0], tri[2], tri[1], tri[3], tri[5], tri[4]]));
+  };
+  cap(0, true);
+  cap(n - 1, false);
+  return { vertices: verts, indices: new Uint32Array(idx) };
+}
 
 /** Creates all static colliders for a track: road, curbs, terrain corridor, barriers, world bounds. */
 export function createTrackColliders(physics: PhysicsWorld, track: TrackGeometry, terrain: Terrain, layout: TrackLayout): TrackColliderSet {
@@ -26,7 +84,7 @@ export function createTrackColliders(physics: PhysicsWorld, track: TrackGeometry
 
   const road = buildRibbon(track, roadProfile(track.halfWidth), { closed: true });
   const roadCol = world.createCollider(
-    R.ColliderDesc.trimesh(road.positions, road.indices).setFriction(0.9).setCollisionGroups(groundGroups),
+    R.ColliderDesc.trimesh(road.positions, road.indices, R.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(0.9).setCollisionGroups(groundGroups),
     fixed,
   );
   physics.setSurface(roadCol, 'asphalt');
@@ -38,7 +96,7 @@ export function createTrackColliders(physics: PhysicsWorld, track: TrackGeometry
       end: zone.endIndex,
     });
     const c = world.createCollider(
-      R.ColliderDesc.trimesh(data.positions, data.indices).setFriction(0.9).setCollisionGroups(groundGroups),
+      R.ColliderDesc.trimesh(data.positions, data.indices, R.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(0.9).setCollisionGroups(groundGroups),
       fixed,
     );
     physics.setSurface(c, 'curb');
@@ -47,39 +105,30 @@ export function createTrackColliders(physics: PhysicsWorld, track: TrackGeometry
 
   const corridor = terrain.buildCorridorMesh(track.def.barrierOffset + 40);
   const terrainCol = world.createCollider(
-    R.ColliderDesc.trimesh(corridor.vertices, corridor.indices).setFriction(0.8).setCollisionGroups(groundGroups),
+    R.ColliderDesc.trimesh(corridor.vertices, corridor.indices, R.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(0.8).setCollisionGroups(groundGroups),
     fixed,
   );
   physics.setSurface(terrainCol, 'grass');
 
+  // One continuous, closed wall mesh per barrier run (instead of ~1600 separate boxes):
+  // no seams for the car to catch on, and internal edges are fixed so sliding along the
+  // wall is smooth. Low friction lets cars glance off instead of being stopped dead.
   const barriers: RAPIER.Collider[] = [];
   const handles = new Set<number>();
   for (const run of layout.barriers) {
-    for (let i = 0; i < run.points.length - 1; i++) {
-      const a = run.points[i];
-      const b = run.points[i + 1];
-      const dx = b.x - a.x;
-      const dz = b.z - a.z;
-      const len = Math.hypot(dx, dz);
-      if (len < 0.05) continue;
-      const yaw = Math.atan2(dx, dz);
-      const half = yaw / 2;
-      const cy = Math.min(a.y, b.y) + BARRIER_HALF_HEIGHT - 0.6;
-      // Push the collider outward by its half thickness so its inner face is the visual face.
-      const nx = (-dz / len) * run.side;
-      const nz = (dx / len) * run.side;
-      const col = world.createCollider(
-        R.ColliderDesc.cuboid(BARRIER_HALF_THICKNESS, BARRIER_HALF_HEIGHT, len / 2 + 0.25)
-          .setTranslation((a.x + b.x) / 2 + nx * BARRIER_HALF_THICKNESS, cy, (a.z + b.z) / 2 + nz * BARRIER_HALF_THICKNESS)
-          .setRotation({ x: 0, y: Math.sin(half), z: 0, w: Math.cos(half) })
-          .setFriction(0.15)
-          .setRestitution(0.25)
-          .setCollisionGroups(barrierGroups),
-        fixed,
-      );
-      barriers.push(col);
-      handles.add(col.handle);
-    }
+    const mesh = barrierMesh(run.points, run.side);
+    if (!mesh) continue;
+    const col = world.createCollider(
+      R.ColliderDesc.trimesh(mesh.vertices, mesh.indices, R.TriMeshFlags.FIX_INTERNAL_EDGES)
+        .setFriction(0.05)
+        .setFrictionCombineRule(R.CoefficientCombineRule.Min)
+        .setRestitution(0.08)
+        .setRestitutionCombineRule(R.CoefficientCombineRule.Min)
+        .setCollisionGroups(barrierGroups),
+      fixed,
+    );
+    barriers.push(col);
+    handles.add(col.handle);
   }
 
   // World bounds so nothing can ever leave the map.

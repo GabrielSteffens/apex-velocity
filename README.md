@@ -18,7 +18,9 @@ Other scripts:
 | `npm run typecheck` | Type-check game and tools |
 | `npm run sim` | Headless full race (real physics + AI, no rendering): `npm run sim -- <laps> <opponents>` |
 | `npm run track-check` | Prints track length, corner radii and minimum section separation |
-| `npm run skidpad` | Steady-state cornering / drift test for tuning car physics |
+| `npm run skidpad` | Steady-state cornering / drift test for tuning car physics (`-- stability` for spin tests) |
+| `npm run drive-test` | Scripted scenarios on the real track: curbs, wall scrapes/impacts, recovery, road edges |
+| `npm run fps-test` | Runs the real loop at 30/60/120/144/240 FPS with jittered frame times; physics and camera must match |
 
 ## Controls
 
@@ -98,6 +100,9 @@ Key design points:
   night sky, floodlight towers with light pools on the asphalt and working headlights. Switch in Settings.
 - Forgiving "slick" tyre model with traction control, ABS-style grip budget and stability control;
   the handbrake still drifts (`npm run skidpad -- stability` measures spin resistance).
+- Frame-rate independent: 120 Hz fixed-step physics with interpolated car, wheels and camera;
+  identical behaviour from 30 to 240 FPS (`npm run fps-test`). Debug overlay: F3.
+- Visual-only body roll / pitch / heave driven by damped springs; smooth continuous wall colliders.
 - Procedural audio, tyre smoke, dust, sparks, exhaust pops, skid marks, ambient motes, bloom, speed blur.
 
 ## Next steps: more cars, tracks and tournaments

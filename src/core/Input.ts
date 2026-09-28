@@ -2,9 +2,10 @@
  * Keyboard + gamepad input. Exposes analog axes for driving and edge-triggered actions
  * for menus (pause, reset, camera).
  */
-export type Action = 'pause' | 'reset' | 'camera' | 'confirm' | 'up' | 'down' | 'back';
+export type Action = 'pause' | 'reset' | 'camera' | 'confirm' | 'up' | 'down' | 'back' | 'debug';
 
 const ACTION_KEYS: Record<Action, string[]> = {
+  debug: ['F3'],
   pause: ['Escape', 'KeyP'],
   reset: ['KeyR'],
   camera: ['KeyC'],
@@ -24,7 +25,7 @@ export class Input {
 
   constructor() {
     window.addEventListener('keydown', (e) => {
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'F3'].includes(e.code)) e.preventDefault();
       if (!e.repeat) {
         for (const [action, codes] of Object.entries(ACTION_KEYS) as [Action, string[]][]) {
           if (codes.includes(e.code)) this.pressedActions.add(action);
@@ -43,15 +44,25 @@ export class Input {
     return codes.some((c) => this.keys.has(c));
   }
 
+  /** Gamepad snapshot, refreshed once per frame in poll() (getGamepads() allocates). */
+  private padCache: Gamepad | null = null;
+
   private pad(): Gamepad | null {
-    if (!navigator.getGamepads) return null;
-    for (const p of navigator.getGamepads()) if (p && p.connected) return p;
-    return null;
+    return this.padCache;
   }
 
-  /** Poll gamepad buttons once per frame to produce edge-triggered actions. */
+  /** Poll gamepad state once per frame and produce edge-triggered actions. */
   poll(): void {
-    const p = this.pad();
+    this.padCache = null;
+    if (navigator.getGamepads) {
+      for (const g of navigator.getGamepads()) {
+        if (g && g.connected) {
+          this.padCache = g;
+          break;
+        }
+      }
+    }
+    const p = this.padCache;
     if (!p) return;
     const map: [number, Action][] = [
       [9, 'pause'], // Start
@@ -112,6 +123,12 @@ export class Input {
       }
     }
     return v;
+  }
+
+  /** True when the current steering value comes from an analog stick. */
+  get steerIsAnalog(): boolean {
+    const p = this.pad();
+    return !!p && this.key('KeyA', 'KeyD', 'ArrowLeft', 'ArrowRight') === false && Math.abs(p.axes[0] ?? 0) > 0.12;
   }
 
   get handbrake(): boolean {

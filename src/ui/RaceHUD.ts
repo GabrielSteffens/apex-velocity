@@ -274,6 +274,9 @@ export class RaceHUD {
   private fpsFrames = 0;
   showFps = false;
   renderStats = { calls: 0, triangles: 0, scale: 1, gpuMs: NaN };
+  /** Debug overlay data (F3 / Settings > FPS Counter). */
+  debug = { frameMs: 0, cpuMs: 0, physicsMs: 0, physicsSteps: 0, objects: 0 };
+  private worstFrame = 0;
   private speedoBox: HTMLElement;
   private textCache = new Map<HTMLElement, string>();
   private mapTimer = 0;
@@ -373,10 +376,18 @@ export class RaceHUD {
     if (this.showFps) {
       this.fpsAcc += dt;
       this.fpsFrames++;
+      this.worstFrame = Math.max(this.worstFrame, this.debug.frameMs);
       if (this.fpsAcc > 0.5) {
-        this.fpsEl.textContent = `${Math.round(this.fpsFrames / this.fpsAcc)} FPS · ${this.renderStats.calls} calls · ${(this.renderStats.triangles / 1e6).toFixed(2)}M tris · ${Math.round(this.renderStats.scale * 100)}% res${isFinite(this.renderStats.gpuMs) ? ` · GPU ${this.renderStats.gpuMs.toFixed(1)} ms` : ''}`;
+        const r = this.renderStats;
+        const d = this.debug;
+        const gpu = isFinite(r.gpuMs) ? `${r.gpuMs.toFixed(1)} ms` : 'n/a';
+        this.fpsEl.textContent =
+          `${Math.round(this.fpsFrames / this.fpsAcc)} FPS · frame ${d.frameMs.toFixed(1)} ms (worst ${this.worstFrame.toFixed(0)}) · ` +
+          `CPU ${d.cpuMs.toFixed(1)} ms · physics ${d.physicsMs.toFixed(2)} ms/${d.physicsSteps} steps · GPU ${gpu} · ` +
+          `${r.calls} calls · ${(r.triangles / 1e6).toFixed(2)}M tris · ${d.objects} objects · ${Math.round(r.scale * 100)}% res`;
         this.fpsAcc = 0;
         this.fpsFrames = 0;
+        this.worstFrame = 0;
       }
     } else if (this.fpsEl.textContent) this.fpsEl.textContent = '';
   }

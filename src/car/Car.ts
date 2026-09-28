@@ -15,11 +15,15 @@ export class Car {
   readonly progress: RaceProgress;
   controller: CarController | null = null;
   /** Rendering hook, set by the game when running with graphics. */
-  visual: { sync(alpha: number): void; dispose(): void } | null = null;
+  visual: { sync(alpha: number, dt?: number): void; dispose(): void } | null = null;
   /** Transform at the previous physics step, for render interpolation. */
   readonly prevPosition = new THREE.Vector3();
   readonly prevQuaternion = new THREE.Quaternion();
   readonly prevVelocity = new THREE.Vector3();
+  /** Wheel state at the previous physics step (suspension length, spin angle) and steer angle. */
+  readonly prevSuspension = new Float32Array(4);
+  readonly prevSpin = new Float32Array(4);
+  prevSteer = 0;
   position = 0;
   resetCooldown = 0;
 
@@ -44,6 +48,12 @@ export class Car {
     this.prevPosition.copy(this.physics.position);
     this.prevQuaternion.copy(this.physics.quaternion);
     this.prevVelocity.copy(this.physics.velocity);
+    const w = this.physics.wheels;
+    for (let i = 0; i < 4; i++) {
+      this.prevSuspension[i] = w[i].suspension;
+      this.prevSpin[i] = w[i].spinAngle;
+    }
+    this.prevSteer = this.physics.steerAngle;
   }
 
   /** Put the car back on the racing surface at its current track position. */

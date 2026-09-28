@@ -117,6 +117,7 @@ export class RaceSession {
       },
       complete: () => ui.raceComplete(),
       reset: (car) => {
+        // Soft re-acquire: the camera glides to the new position instead of cutting.
         if (car.isPlayer) svc.camera.snap();
       },
     };
@@ -173,7 +174,7 @@ export class RaceSession {
     let playerSkid = 0;
     let playerRough = 0;
     for (const car of this.rm.cars) {
-      car.visual?.sync(alpha);
+      car.visual?.sync(alpha, dt);
       const ph = car.physics;
       const f = this.fx.get(car)!;
       const near = this.svc.camera.camera.position.distanceToSquared(ph.position) < 160 * 160;
@@ -261,14 +262,8 @@ export class RaceSession {
       }
       const others = this.othersBuf;
       others.length = 0;
-      for (const [c, d, slot] of [[n0, d0, this.otherA], [n1, d1, this.otherB]] as const) {
-        if (!c) continue;
-        slot.rpm = c.physics.rpm;
-        slot.load = c.physics.engineLoad;
-        slot.distance = d;
-        slot.pan = Math.max(-1, Math.min(1, _p.copy(c.physics.position).sub(cam.position).normalize().dot(right)));
-        others.push(slot);
-      }
+      this.fillOther(n0, d0, this.otherA, cam.position, right);
+      this.fillOther(n1, d1, this.otherB, cam.position, right);
       audio.updateDriving({
         rpm: p.physics.rpm,
         load: p.physics.enabled ? p.physics.engineLoad : Math.min(1, this.svc.input.throttle),
@@ -279,6 +274,15 @@ export class RaceSession {
         active: racing,
       });
     }
+  }
+
+  private fillOther(c: Car | null, d: number, slot: { rpm: number; load: number; distance: number; pan: number }, camPos: THREE.Vector3, right: THREE.Vector3): void {
+    if (!c) return;
+    slot.rpm = c.physics.rpm;
+    slot.load = c.physics.engineLoad;
+    slot.distance = d;
+    slot.pan = Math.max(-1, Math.min(1, _p.copy(c.physics.position).sub(camPos).normalize().dot(right)));
+    this.othersBuf.push(slot);
   }
 
   dispose(): void {
