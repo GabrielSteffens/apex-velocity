@@ -122,6 +122,11 @@ export class RaceSession {
     };
   }
 
+  /** Headlights on/off for every car (real spotlight only on the player's car). */
+  setNight(on: boolean): void {
+    for (const v of this.visuals) v.setNight(on, v.car.isPlayer);
+  }
+
   get player(): Car | null {
     return this.rm.player;
   }

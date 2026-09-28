@@ -14,6 +14,10 @@ export class SettingsPanel {
     const body = h('div', {});
     const render = () => {
       body.replaceChildren(
+        this.choice('Time of Day', 'timeOfDay', [
+          ['sunset', 'Sunset'],
+          ['night', 'Night'],
+        ]),
         this.choice('Graphics', 'quality', [
           ['low', 'Low'],
           ['medium', 'Medium'],

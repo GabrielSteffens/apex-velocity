@@ -191,6 +191,12 @@ export class ParticleManager {
     this.group.add(this.motes);
   }
 
+  /** Tint smoke/dust by the ambient light of the current time of day. */
+  setLight(color: number, night: boolean): void {
+    for (const pool of [this.smoke]) (pool.points.material as THREE.ShaderMaterial).uniforms.uLight.value.setHex(color);
+    (this.motes.material as THREE.PointsMaterial).opacity = night ? 0.25 : 0.55;
+  }
+
   setViewportHeight(h: number, fovDeg: number): void {
     const scale = h / (2 * Math.tan(THREE.MathUtils.degToRad(fovDeg) / 2));
     (this.smoke.points.material as THREE.ShaderMaterial).uniforms.uScale.value = scale;

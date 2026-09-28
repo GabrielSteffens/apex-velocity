@@ -7,6 +7,7 @@ import type { RacingLine } from '../ai/RacingLine';
 import { Noise2D, Random } from '../core/math';
 import * as tex from '../render/textures';
 import { mergeByMaterial } from '../render/merge';
+import { buildRibbon } from './TrackMeshData';
 
 type TreeKind = 'pine' | 'broad' | 'cypress';
 
@@ -89,6 +90,10 @@ export class TrackScenery {
   readonly group = new THREE.Group();
   /** Countdown lamp materials on the start gantry: [pod][0=red,1=green] */
   private lampMats: THREE.MeshStandardMaterial[][] = [];
+  /** Floodlight lamp heads (emissive at night). */
+  private floodLampMat = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, emissive: 0xfff1d8, emissiveIntensity: 0, roughness: 0.3 });
+  /** Additive light pools painted on the asphalt under the floodlights. */
+  private poolMat!: THREE.MeshBasicMaterial;
   private rnd: Random;
 
   constructor(
@@ -107,6 +112,7 @@ export class TrackScenery {
     this.buildBridge();
     this.buildBillboards();
     this.buildCornerSigns();
+    this.buildFloodlights();
     // Collapse the hundreds of static prop meshes into one draw call per material.
     mergeByMaterial(this.group);
   }
@@ -459,6 +465,88 @@ export class TrackScenery {
       if (o instanceof THREE.Mesh && o.geometry !== lampGeo) o.castShadow = true;
     });
     this.group.add(g);
+  }
+
+  /**
+   * Floodlight towers along the whole lap. At night their lamps glow and each one paints
+   * an additive pool of light on the road (cheap stand-in for dozens of real lights).
+   */
+  private buildFloodlights(): void {
+    const t = this.track;
+    const bo = t.def.barrierOffset;
+    const steel = new THREE.MeshStandardMaterial({ color: 0x3c4046, metalness: 0.6, roughness: 0.45 });
+    this.poolMat = new THREE.MeshBasicMaterial({
+      map: tex.radialGradient('rgba(255,236,205,1)', 'rgba(255,236,205,0)'),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      opacity: 0.42,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+      visible: false,
+    });
+    const spacing = 62;
+    const poolLen = 56;
+    const w = t.halfWidth + 3;
+    const n = t.count;
+    let k = 0;
+    for (let s = 20; s < t.length - 20; s += spacing, k++) {
+      const side = k % 2 === 0 ? 1 : -1;
+      const lat = side * (bo + 2.6);
+      const p = t.offsetPoint(s, lat, new THREE.Vector3());
+      if (t.distanceToCenterline(p.x, p.z) < bo + 1) continue; // inside of a tight corner
+      const f = this.frameAt(s, lat);
+      const g = new THREE.Group();
+      g.position.copy(f.pos);
+      g.rotation.y = f.yaw; // local +Z faces the track
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.35, 16, 8), steel);
+      pole.position.y = 8;
+      g.add(pole);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 3.2), steel);
+      arm.position.set(0, 15.6, 1.3);
+      g.add(arm);
+      for (const x of [-0.75, 0.75]) {
+        const housing = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 0.35), steel);
+        housing.position.set(x, 15.2, 2.7);
+        housing.rotation.x = 0.6;
+        g.add(housing);
+        const lamp = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 0.65), this.floodLampMat);
+        lamp.position.set(x, 15.02, 2.9);
+        lamp.rotation.x = Math.PI / 2 - 0.6; // plane normal (+Z) tilted down toward the track
+        g.add(lamp);
+      }
+      g.traverse((o) => {
+        if (o instanceof THREE.Mesh && o.material !== this.floodLampMat) o.castShadow = true;
+      });
+      this.group.add(g);
+
+      // Pool of light on the asphalt, conforming to the road surface.
+      const i0 = (t.indexAt(s - poolLen / 2) + n) % n;
+      const i1 = (t.indexAt(s + poolLen / 2) + n) % n;
+      const ribbon = buildRibbon(
+        t,
+        { laterals: [-w, -w / 2, 0, w / 2, w], heights: [0.03, 0.035, 0.04, 0.035, 0.03], us: [0, 0.25, 0.5, 0.75, 1] },
+        { start: i0, end: i1, vScale: poolLen },
+      );
+      // Shift the pool slightly toward the tower side.
+      for (let u = 0; u < ribbon.uvs.length; u += 2) ribbon.uvs[u] = ribbon.uvs[u] * 0.9 + 0.05 - side * 0.06;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(ribbon.positions, 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(ribbon.uvs, 2));
+      geo.setIndex(new THREE.BufferAttribute(ribbon.indices, 1));
+      geo.computeVertexNormals();
+      const pool = new THREE.Mesh(geo, this.poolMat);
+      pool.renderOrder = 3;
+      this.group.add(pool);
+    }
+  }
+
+  /** Switch trackside lighting for night races. */
+  setNight(on: boolean): void {
+    this.floodLampMat.emissiveIntensity = on ? 9 : 0;
+    this.floodLampMat.color.setHex(on ? 0xffffff : 0x9a9a9a);
+    this.poolMat.visible = on;
   }
 
   /** Countdown lights: `reds` = number of red pods lit (0..5), `green` = all green. */

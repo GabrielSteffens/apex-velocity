@@ -12,7 +12,7 @@ export const cars: CarDefinition[] = [
     topSpeed: 258,
     braking: 13.5,
     handling: 0.8,
-    grip: 1.75,
+    grip: 1.9,
     downforce: 1.1,
     frontDriveBias: 0.15,
     gearCount: 6,

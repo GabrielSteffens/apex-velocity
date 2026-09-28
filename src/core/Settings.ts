@@ -1,4 +1,5 @@
 import type { Quality } from '../render/Renderer';
+import type { TimeOfDay } from '../data/types';
 
 export type Difficulty = 'easy' | 'normal' | 'hard';
 
@@ -10,6 +11,7 @@ export interface GameSettings {
   difficulty: Difficulty;
   cameraShake: boolean;
   showFps: boolean;
+  timeOfDay: TimeOfDay;
 }
 
 const DEFAULTS: GameSettings = {
@@ -20,6 +22,7 @@ const DEFAULTS: GameSettings = {
   difficulty: 'normal',
   cameraShake: true,
   showFps: false,
+  timeOfDay: 'night',
 };
 
 const KEY = 'apex-velocity.settings.v1';

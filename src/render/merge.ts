@@ -9,7 +9,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 export function mergeByMaterial(root: THREE.Object3D, keep: Set<THREE.Object3D> = new Set()): void {
   root.updateMatrixWorld(true);
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
-  const groups = new Map<THREE.Material, { geos: THREE.BufferGeometry[]; cast: boolean; receive: boolean }>();
+  const groups = new Map<THREE.Material, { geos: THREE.BufferGeometry[]; cast: boolean; receive: boolean; order: number }>();
   const remove: THREE.Mesh[] = [];
   root.traverse((o) => {
     if (!(o instanceof THREE.Mesh) || o instanceof THREE.InstancedMesh || keep.has(o) || Array.isArray(o.material)) return;
@@ -22,10 +22,11 @@ export function mergeByMaterial(root: THREE.Object3D, keep: Set<THREE.Object3D> 
     if (!g.attributes.normal) g = (g.computeVertexNormals(), g);
     g.morphAttributes = {};
     let entry = groups.get(o.material);
-    if (!entry) groups.set(o.material, (entry = { geos: [], cast: false, receive: false }));
+    if (!entry) groups.set(o.material, (entry = { geos: [], cast: false, receive: false, order: 0 }));
     entry.geos.push(g);
     entry.cast ||= o.castShadow;
     entry.receive ||= o.receiveShadow;
+    entry.order = Math.max(entry.order, o.renderOrder);
     remove.push(o);
   });
   for (const o of remove) o.removeFromParent();
@@ -36,6 +37,7 @@ export function mergeByMaterial(root: THREE.Object3D, keep: Set<THREE.Object3D> 
     const mesh = new THREE.Mesh(merged, mat);
     mesh.castShadow = e.cast;
     mesh.receiveShadow = e.receive;
+    mesh.renderOrder = e.order;
     root.add(mesh);
   }
 }

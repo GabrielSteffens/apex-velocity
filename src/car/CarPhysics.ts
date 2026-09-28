@@ -106,6 +106,7 @@ export class CarPhysics {
   private readonly rayGroups = groups(GROUP.CAR, GROUP.GROUND);
   private readonly comHeight: number;
   private rough = 0;
+  private reverseHold = 0;
   private readonly rays: RAPIER.Ray[] = [];
 
   readonly position = new THREE.Vector3();
@@ -286,7 +287,11 @@ export class CarPhysics {
     let driveDir = 1;
     this.reversing = false;
     // Brake pedal reverses once the car is (almost) stopped.
-    if (brake > 0.1 && fwdSpeed < 1.0 && throttle < 0.1) {
+    // Holding brake at a standstill engages reverse after a short pause, so braking to a
+    // stop doesn't immediately shoot the car backwards.
+    if (brake > 0.1 && fwdSpeed < 1.0 && throttle < 0.1) this.reverseHold += dt;
+    else if (brake <= 0.1) this.reverseHold = 0;
+    if (brake > 0.1 && fwdSpeed < 1.0 && throttle < 0.1 && (this.reverseHold > 0.3 || fwdSpeed < -0.5)) {
       this.reversing = true;
       driveDir = -1;
       throttle = brake;
@@ -339,6 +344,9 @@ export class CarPhysics {
       }
     }
     this.engineLoad = enabled ? throttle : revInput;
+    // Traction control: back off the power when the driven rear tyres slide past their peak.
+    const rearRatio = Math.max(this.wheels[2].slipRatio, this.wheels[3].slipRatio);
+    if (!handbrake && driveDir > 0 && rearRatio > 1.05) engineForce *= Math.max(0.35, 1 - (rearRatio - 1.05) * 2.5);
     const brakeForce = brake * def.braking * this.mass;
 
     // ---------- Wheels ----------
@@ -444,14 +452,17 @@ export class CarPhysics {
       const N = wh.load;
       let mu = def.grip * surf.grip;
       const rear = !wh.front;
-      if (rear && handbrake) mu *= 0.55;
+      // Slightly more rear grip than front = stable, predictable (understeer-biased) balance.
+      if (rear) mu *= handbrake ? 0.55 : 1.08;
 
       // Lateral: slip-angle based with saturation and a small drop after the peak.
       const slipAngle = Math.atan2(vLat, Math.max(Math.abs(vLong), 4));
-      const peak = rear ? 0.11 : 0.13;
+      const peak = rear ? 0.13 : 0.12;
       let latCoef = slipAngle / peak;
       const absC = Math.abs(latCoef);
-      if (absC > 1) latCoef = Math.sign(latCoef) * Math.max(0.82, 1 - (absC - 1) * 0.08);
+      // Past the peak the tyre keeps most of its grip (slick, forgiving); the handbrake
+      // path above still lets the rear break away for drifts.
+      if (absC > 1) latCoef = Math.sign(latCoef) * Math.max(handbrake && rear ? 0.8 : 0.93, 1 - (absC - 1) * 0.05);
       let fLat = -latCoef * mu * N;
 
       // Longitudinal
@@ -460,7 +471,7 @@ export class CarPhysics {
       // Each axle has two wheels, so split the axle share in half.
       if (driveShare > 0 && engineForce !== 0) fLong += (engineForce * driveShare) / 2;
       if (brakeForce > 0) {
-        const share = wh.front ? 0.62 : 0.38;
+        const share = wh.front ? 0.68 : 0.32;
         fLong -= (clamp(vLong * 3, -1, 1) * brakeForce * share) / 2;
       }
       if (rear && handbrake) {
@@ -474,11 +485,15 @@ export class CarPhysics {
       // Friction ellipse: longitudinal takes priority up to the limit, lateral keeps a minimum share.
       const limit = mu * N;
       let slipLong = 0;
-      if (Math.abs(fLong) > limit) {
-        slipLong = (Math.abs(fLong) - limit) / (this.mass * 0.25);
-        fLong = Math.sign(fLong) * limit;
+      // ABS / traction control: longitudinal force can use at most ~85% of the grip,
+      // so braking or accelerating in a corner never removes all lateral grip.
+      const longCap = limit * (rear && handbrake ? 1 : 0.85);
+      if (Math.abs(fLong) > longCap) {
+        slipLong = (Math.abs(fLong) - longCap) / (this.mass * 0.25);
+        fLong = Math.sign(fLong) * longCap;
       }
-      const latLimit = limit * Math.max(0.55, Math.sqrt(Math.max(0, 1 - (fLong / limit) ** 2)));
+      const minLat = handbrake && rear ? 0.55 : rear ? 0.85 : 0.75;
+      const latLimit = limit * Math.max(minLat, Math.sqrt(Math.max(0, 1 - (fLong / limit) ** 2)));
       if (Math.abs(fLat) > latLimit) fLat = Math.sign(fLat) * latLimit;
 
       wh.slipLateral = Math.abs(vLat);
@@ -519,9 +534,19 @@ export class CarPhysics {
       body.applyTorqueImpulse({ x: _axis.x * k, y: 0, z: _axis.z * k }, true);
     } else {
       this.airTime = 0;
-      // Yaw damping at speed keeps slides catchable (arcade assist).
+      // Stability control: yaw damping that ramps up with the body slip angle, so slides
+      // are caught instead of turning into spins. Mostly off with the handbrake (drifting).
       const yawRate = _w.dot(_up);
-      const assist = handbrake ? 0.1 : 0.35;
+      let bodySlip = 0;
+      const planar = Math.hypot(_v.x, _v.z);
+      if (planar > 5 && fwdSpeed > 0) {
+        const vx = _v.x / planar;
+        const vz = _v.z / planar;
+        const fl = Math.hypot(_fwd.x, _fwd.z) || 1;
+        bodySlip = Math.abs(Math.asin(clamp((_fwd.x / fl) * vz - (_fwd.z / fl) * vx, -1, 1)));
+      }
+      const esc = handbrake ? 0 : clamp((bodySlip - 0.05) / 0.2, 0, 1);
+      const assist = handbrake ? 0.1 : 0.35 + esc * 1.4;
       body.applyTorqueImpulse(_f.copy(_up).multiplyScalar(-yawRate * this.mass * assist * dt), true);
     }
     if (_up.y < 0.25) this.upsideDownTime += dt;

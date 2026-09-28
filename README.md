@@ -94,6 +94,10 @@ Key design points:
 - 5 AI opponents (1–7 configurable) with individual skill, aggression, consistency and mistake rates.
 - 3-2-1-GO countdown, laps, lap/best times, live standings, mini-map, tachometer, wrong-way warning,
   finish, results table, restart, pause, settings (graphics, difficulty, laps, opponents, volume…).
+- Night mode (default) and sunset: time-of-day presets in `TrackDefinition.environments` with a starry
+  night sky, floodlight towers with light pools on the asphalt and working headlights. Switch in Settings.
+- Forgiving "slick" tyre model with traction control, ABS-style grip budget and stability control;
+  the handbrake still drifts (`npm run skidpad -- stability` measures spin resistance).
 - Procedural audio, tyre smoke, dust, sparks, exhaust pops, skid marks, ambient motes, bloom, speed blur.
 
 ## Next steps: more cars, tracks and tournaments

@@ -90,8 +90,7 @@ export class Game {
     const R = await loadRapier();
     this.physics = new PhysicsWorld(R);
     const trackDef = getTrack(this.trackId);
-    this.env = new Environment(this.scene, this.renderer.renderer, trackDef);
-    this.renderer.renderer.toneMappingExposure = trackDef.environment.exposure;
+    this.env = this.createEnvironment();
     this.trackScene = await TrackScene.create(trackDef, this.physics, progress);
     this.scene.add(this.trackScene.group);
     this.chase = new ChaseCamera(this.camera, this.physics, this.trackScene.terrain);
@@ -146,8 +145,29 @@ export class Game {
     this.hud.resize();
   }
 
+  private createEnvironment(): Environment {
+    const trackDef = getTrack(this.trackId);
+    const preset = trackDef.environments[this.settings.values.timeOfDay];
+    this.renderer.renderer.toneMappingExposure = preset.exposure;
+    return new Environment(this.scene, this.renderer.renderer, preset, trackDef.terrain.seed);
+  }
+
+  /** Applies the time-of-day preset to sky/lights, trackside lamps, headlights and particles. */
+  private applyTimeOfDay(): void {
+    const preset = getTrack(this.trackId).environments[this.settings.values.timeOfDay];
+    if (this.env.preset !== preset) {
+      this.env.dispose();
+      this.env = this.createEnvironment();
+    }
+    const night = preset.lightsOn;
+    this.trackScene.scenery.setNight(night);
+    this.session?.setNight(night);
+    this.particles.setLight(preset.particleLight, night);
+  }
+
   private applySettings(): void {
     const s = this.settings.values;
+    this.applyTimeOfDay();
     this.renderer.setQuality(s.quality);
     this.env.setShadowQuality(s.quality === 'low' ? 1024 : 2048);
     this.env.setShadowExtent(s.quality === 'high' ? 80 : 60);
@@ -198,6 +218,7 @@ export class Game {
         raceComplete: () => this.results.update(this.session!.rm),
       },
     );
+    this.session.setNight(this.env.isNight);
     this.hud.resetRows();
     this.accumulator = 0;
     this.chase.snap();

@@ -64,6 +64,38 @@ export interface TrackControlPoint {
   y: number;
 }
 
+export type TimeOfDay = 'sunset' | 'night';
+
+/** Everything that defines the look of a time of day: sky, key light, fog, trackside lights. */
+export interface EnvironmentPreset {
+  sky: 'physical' | 'night';
+  /** Direction of the key light (sun, or the floodlights' dominant direction at night). */
+  sunElevation: number;
+  sunAzimuth: number;
+  sunColor: number;
+  sunIntensity: number;
+  hemiSky: number;
+  hemiGround: number;
+  hemiIntensity: number;
+  fogColor: number;
+  fogNear: number;
+  fogFar: number;
+  /** Physical sky parameters (sky: 'physical'). */
+  turbidity: number;
+  rayleigh: number;
+  exposure: number;
+  envIntensity: number;
+  /** Distant mountain silhouettes: near and far ridge colours. */
+  mountainColors: [number, number];
+  /** Floodlight towers and car headlights switched on. */
+  lightsOn: boolean;
+  /** Night sky: moon direction. */
+  moonElevation?: number;
+  moonAzimuth?: number;
+  /** Tint applied to smoke / dust sprites. */
+  particleLight: number;
+}
+
 export type SceneryTheme = 'sunset-hills' | 'desert' | 'alpine' | 'city-night';
 
 export interface TrackDefinition {
@@ -85,16 +117,8 @@ export interface TrackDefinition {
   /** Arc length (meters) of the grid slots behind the line. */
   gridSpacing: number;
   theme: SceneryTheme;
-  environment: {
-    sunElevation: number;
-    sunAzimuth: number;
-    fogColor: number;
-    fogNear: number;
-    fogFar: number;
-    turbidity: number;
-    rayleigh: number;
-    exposure: number;
-  };
+  /** Lighting presets per time of day (see EnvironmentPreset). */
+  environments: Record<TimeOfDay, EnvironmentPreset>;
   terrain: {
     seed: number;
     hilliness: number;
