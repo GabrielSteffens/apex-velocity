@@ -255,16 +255,15 @@ export class CarPhysics {
     const def = this.def;
     this.syncState();
 
-    const tr = body.translation();
-    const rot = body.rotation();
-    _q.set(rot.x, rot.y, rot.z, rot.w);
-    _pos.set(tr.x, tr.y, tr.z);
-    _fwd.copy(LOCAL_FORWARD).applyQuaternion(_q);
-    _up.copy(LOCAL_UP).applyQuaternion(_q);
+    // syncState() already read translation/rotation/linvel from Rapier; reuse them
+    // (each Rapier getter allocates a fresh object).
+    _q.copy(this.quaternion);
+    _pos.copy(this.position);
+    _fwd.copy(this.forward);
+    _up.copy(this.up);
     _right.copy(LOCAL_RIGHT).applyQuaternion(_q);
-    const lv = body.linvel();
     const av = body.angvel();
-    _v.set(lv.x, lv.y, lv.z);
+    _v.copy(this.velocity);
     _w.set(av.x, av.y, av.z);
     const wc = body.worldCom();
     _com.set(wc.x, wc.y, wc.z);

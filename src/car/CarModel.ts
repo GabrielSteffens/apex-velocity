@@ -86,7 +86,7 @@ export function buildCarModel(def: CarDefinition, color: number, number: number)
   const accentColor = new THREE.Color(color).getHSL({ h: 0, s: 0, l: 0 }).l > 0.6 ? 0x151515 : 0xf4f4f4;
   const accent = new THREE.MeshPhysicalMaterial({ color: accentColor, metalness: 0.3, roughness: 0.35, clearcoat: 1, clearcoatRoughness: 0.1 });
   const carbon = new THREE.MeshStandardMaterial({ color: 0x121314, roughness: 0.45, metalness: 0.4 });
-  const matteBlack = new THREE.MeshStandardMaterial({ color: 0x0b0b0c, roughness: 0.8 });
+  const matteBlack = carbon; // visually indistinguishable here; one less draw call per car
   const glass = new THREE.MeshPhysicalMaterial({ color: 0x0b1118, metalness: 0.2, roughness: 0.04, clearcoat: 1, envMapIntensity: 1.8 });
   const chrome = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 1, roughness: 0.2 });
 
@@ -227,7 +227,7 @@ export function buildCarModel(def: CarDefinition, color: number, number: number)
 
   // Lights
   const headLightMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4e0, emissiveIntensity: 2.2, roughness: 0.2 });
-  const lensMat = new THREE.MeshPhysicalMaterial({ color: 0x0c0c0c, metalness: 0.8, roughness: 0.1, clearcoat: 1 });
+  const lensMat = glass;
   for (const side of [-1, 1]) {
     const housing = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.07, 0.3), lensMat);
     housing.position.set(side * 0.6, 0.575, L - 0.2);
@@ -316,9 +316,11 @@ export function buildCarModel(def: CarDefinition, color: number, number: number)
     body.add(decal);
   }
 
+  // Only the big shapes cast shadows; lamps, decals and trim don't need a shadow pass.
+  const noShadow = new Set<THREE.Material>([headLightMat, brakeLightMat, reverseLightMat, decalMat, chrome, accent]);
   body.traverse((o) => {
     if (o instanceof THREE.Mesh) {
-      o.castShadow = true;
+      o.castShadow = !noShadow.has(o.material as THREE.Material);
       o.receiveShadow = true;
     }
   });
@@ -392,7 +394,7 @@ export function buildCarModel(def: CarDefinition, color: number, number: number)
     pivot.add(caliper);
     pivot.traverse((o) => {
       if (o instanceof THREE.Mesh) {
-        o.castShadow = true;
+        o.castShadow = o.material !== caliperMat;
         o.receiveShadow = true;
       }
     });

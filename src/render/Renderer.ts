@@ -5,6 +5,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js';
+import { GpuTimer } from './GpuTimer';
 
 export type Quality = 'low' | 'medium' | 'high';
 
@@ -65,8 +66,14 @@ export class Renderer {
   private quality: Quality = 'high';
   /** Dynamic resolution multiplier (0.55..1), driven by measured frame time. */
   private renderScale = 1;
-  private frameTimeAvg = 16.7;
-  private scaleCooldown = 2;
+  private slowTime = 0;
+  private fastTime = 0;
+  private gpuAvg = NaN;
+  private missed = 0;
+  private upscaleLock = 0;
+  private lastDownscaleAt = -1e9;
+  private clock = 0;
+  readonly gpuTimer: GpuTimer;
   private width = 1;
   private height = 1;
 
@@ -88,6 +95,7 @@ export class Renderer {
 
     // No MSAA: a multisampled HDR target cost ~20 ms/frame on integrated GPUs. FXAA below
     // gives clean edges for ~1 ms instead.
+    this.gpuTimer = new GpuTimer(this.renderer.getContext() as WebGL2RenderingContext);
     const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 0 });
     this.composer = new EffectComposer(this.renderer, rt);
     this.renderPass = new RenderPass(scene, camera);
@@ -141,20 +149,54 @@ export class Renderer {
    * raises it again when there is headroom, so weak GPUs stay smooth instead of stuttering.
    */
   adaptResolution(frameMs: number, dt: number): void {
-    // Ignore huge spikes (tab switches, loading) so they don't skew the average.
+    this.clock += dt;
+    // Ignore huge spikes (tab switches, loading) so they don't skew the averages.
     if (frameMs > 100) return;
-    this.frameTimeAvg += (frameMs - this.frameTimeAvg) * 0.05;
-    this.scaleCooldown -= dt;
-    if (this.scaleCooldown > 0) return;
-    let next = this.renderScale;
-    if (this.frameTimeAvg > 19) next = Math.max(0.55, this.renderScale - 0.1);
-    else if (this.frameTimeAvg < 17.5 && this.renderScale < 1) next = Math.min(1, this.renderScale + 0.05);
-    if (next !== this.renderScale) {
-      this.renderScale = next;
-      this.resize();
-      this.scaleCooldown = 2.5;
+    let tooSlow: boolean;
+    let headroom: boolean;
+    let ideal = this.renderScale;
+    const gpu = this.gpuTimer.lastMs;
+    if (this.gpuTimer.available && isFinite(gpu)) {
+      // Keep GPU time around 13.5 ms so every frame makes a 60 Hz refresh with margin;
+      // a frame that misses the 16.7 ms deadline is shown twice, which reads as a stutter.
+      this.gpuAvg = isFinite(this.gpuAvg) ? this.gpuAvg + (gpu - this.gpuAvg) * 0.05 : gpu;
+      tooSlow = this.gpuAvg > 15;
+      headroom = this.gpuAvg < 10.5;
+      // Cost scales with pixel count = scale^2.
+      ideal = this.renderScale * Math.sqrt(13.5 / Math.max(1, this.gpuAvg));
     } else {
-      this.scaleCooldown = 0.5;
+      // Fallback: count frames that missed a 60 Hz refresh.
+      this.missed += ((frameMs > 20 ? 1 : 0) - this.missed) * 0.03;
+      tooSlow = this.missed > 0.08;
+      headroom = this.missed < 0.005 && frameMs < 17.5;
+      ideal = tooSlow ? this.renderScale - 0.1 : this.renderScale + 0.05;
+    }
+    if (tooSlow) {
+      this.slowTime += dt;
+      this.fastTime = 0;
+    } else if (headroom && this.renderScale < 1) {
+      this.fastTime += dt;
+      this.slowTime = 0;
+    } else {
+      this.slowTime = Math.max(0, this.slowTime - dt);
+      this.fastTime = Math.max(0, this.fastTime - dt);
+    }
+    let next = this.renderScale;
+    // Each change reallocates render targets (a small hitch), so act on sustained trends only.
+    if (this.slowTime > 1.2) next = Math.max(0.5, Math.min(this.renderScale - 0.05, ideal));
+    else if (this.fastTime > 5 && this.clock > this.upscaleLock) next = Math.min(1, Math.max(this.renderScale + 0.05, Math.min(ideal, this.renderScale + 0.15)));
+    next = Math.round(next * 20) / 20;
+    if (next !== this.renderScale) {
+      if (next < this.renderScale) {
+        // Upscaled and immediately had to come back down: stop oscillating for a while.
+        if (this.clock - this.lastDownscaleAt < 20) this.upscaleLock = this.clock + 60;
+        this.lastDownscaleAt = this.clock;
+      }
+      this.renderScale = next;
+      this.slowTime = 0;
+      this.fastTime = 0;
+      this.missed = 0;
+      this.resize();
     }
   }
 
@@ -170,10 +212,12 @@ export class Renderer {
     this.finalPass.uniforms.uSpeed.value = speedFactor;
     this.finalPass.uniforms.uTime.value = time % 100;
     this.renderer.info.reset();
+    this.gpuTimer.begin();
     this.composer.render();
+    this.gpuTimer.end();
   }
 
-  get stats(): { calls: number; triangles: number; scale: number } {
-    return { calls: this.renderer.info.render.calls, triangles: this.renderer.info.render.triangles, scale: this.renderScale };
+  get stats(): { calls: number; triangles: number; scale: number; gpuMs: number } {
+    return { calls: this.renderer.info.render.calls, triangles: this.renderer.info.render.triangles, scale: this.renderScale, gpuMs: this.gpuAvg };
   }
 }

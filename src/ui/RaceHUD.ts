@@ -7,41 +7,48 @@ function hex(c: number): string {
   return '#' + c.toString(16).padStart(6, '0');
 }
 
-/** Canvas tachometer + digital speed + gear. */
+/**
+ * Canvas tachometer + digital speed + gear. The static dial (plate, ticks, numbers) is
+ * rendered once into a cached canvas; each frame only draws the needle arc and digits,
+ * and skips the redraw entirely when nothing visible changed.
+ */
 class Speedometer {
   readonly canvas = h('canvas');
   private ctx: CanvasRenderingContext2D;
   private size = 300;
+  private dpr = 1;
   private shownSpeed = 0;
   private shownRpm = 0;
+  private dial: HTMLCanvasElement | null = null;
+  private dialRedline = -1;
+  private lastKey = '';
 
   constructor() {
     this.ctx = this.canvas.getContext('2d')!;
   }
 
   resize(cssSize: number): void {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.dpr = Math.min(2, window.devicePixelRatio || 1);
     this.size = cssSize;
-    this.canvas.width = Math.round(cssSize * dpr);
-    this.canvas.height = Math.round(cssSize * dpr);
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.canvas.width = Math.round(cssSize * this.dpr);
+    this.canvas.height = Math.round(cssSize * this.dpr);
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.dial = null;
+    this.lastKey = '';
   }
 
-  draw(speedKmh: number, rpm: number, redline: number, gear: number, dt: number): void {
-    const ctx = this.ctx;
+  private geometry(redline: number) {
     const S = this.size;
-    const k = 1 - Math.exp(-14 * dt);
-    this.shownSpeed += (speedKmh - this.shownSpeed) * k;
-    this.shownRpm += (rpm - this.shownRpm) * k;
-    ctx.clearRect(0, 0, S, S);
-    const cx = S / 2;
-    const cy = S / 2;
-    const R = S * 0.44;
-    const a0 = Math.PI * 0.75;
-    const sweep = Math.PI * 1.5;
-    const maxRpm = Math.ceil(redline / 1000) * 1000 + 1000;
+    return { S, cx: S / 2, cy: S / 2, R: S * 0.44, a0: Math.PI * 0.75, sweep: Math.PI * 1.5, maxRpm: Math.ceil(redline / 1000) * 1000 + 1000 };
+  }
 
-    // Backplate
+  private buildDial(redline: number): void {
+    const { S, cx, cy, R, a0, sweep, maxRpm } = this.geometry(redline);
+    const c = document.createElement('canvas');
+    c.width = this.canvas.width;
+    c.height = this.canvas.height;
+    const ctx = c.getContext('2d')!;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     const g = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 1.12);
     g.addColorStop(0, 'rgba(10,11,14,0.85)');
     g.addColorStop(0.85, 'rgba(10,11,14,0.6)');
@@ -50,36 +57,15 @@ class Speedometer {
     ctx.beginPath();
     ctx.arc(cx, cy, R * 1.12, 0, Math.PI * 2);
     ctx.fill();
-
-    // Track arc
-    ctx.lineCap = 'butt';
     ctx.lineWidth = S * 0.045;
     ctx.strokeStyle = 'rgba(255,255,255,0.1)';
     ctx.beginPath();
     ctx.arc(cx, cy, R, a0, a0 + sweep);
     ctx.stroke();
-    // Red zone
-    const rz = (redline - 500) / maxRpm;
     ctx.strokeStyle = 'rgba(255,59,47,0.45)';
     ctx.beginPath();
-    ctx.arc(cx, cy, R, a0 + sweep * rz, a0 + sweep);
+    ctx.arc(cx, cy, R, a0 + sweep * ((redline - 500) / maxRpm), a0 + sweep);
     ctx.stroke();
-
-    // RPM fill
-    const f = Math.min(1, this.shownRpm / maxRpm);
-    const hot = this.shownRpm > redline - 700;
-    const grad = ctx.createLinearGradient(cx - R, cy + R, cx + R, cy - R);
-    grad.addColorStop(0, '#ffc53d');
-    grad.addColorStop(1, '#ff3b2f');
-    ctx.strokeStyle = hot ? '#ff2a1f' : grad;
-    ctx.shadowColor = hot ? 'rgba(255,40,30,0.9)' : 'rgba(255,120,40,0.6)';
-    ctx.shadowBlur = hot ? 18 : 10;
-    ctx.beginPath();
-    ctx.arc(cx, cy, R, a0, a0 + sweep * f);
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    // Ticks and numbers
     ctx.fillStyle = 'rgba(244,241,234,0.75)';
     ctx.strokeStyle = 'rgba(244,241,234,0.8)';
     ctx.font = `700 ${S * 0.05}px Rajdhani, sans-serif`;
@@ -100,21 +86,60 @@ class Speedometer {
         ctx.fillText(String(r / 1000), cx + Math.cos(a) * rt, cy + Math.sin(a) * rt);
       }
     }
-    // Needle tip marker
-    const na = a0 + sweep * f;
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(cx + Math.cos(na) * R, cy + Math.sin(na) * R, S * 0.018, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Speed readout
-    ctx.fillStyle = '#fff';
-    ctx.font = `italic 900 ${S * 0.25}px "Saira Condensed", Rajdhani, sans-serif`;
-    ctx.fillText(String(Math.round(this.shownSpeed)), cx, cy - S * 0.02);
     ctx.fillStyle = 'rgba(244,241,234,0.6)';
     ctx.font = `700 ${S * 0.055}px Rajdhani, sans-serif`;
     ctx.fillText('KM/H', cx, cy + S * 0.12);
-    // Gear box
+    this.dial = c;
+    this.dialRedline = redline;
+  }
+
+  draw(speedKmh: number, rpm: number, redline: number, gear: number, dt: number): void {
+    const k = 1 - Math.exp(-14 * dt);
+    this.shownSpeed += (speedKmh - this.shownSpeed) * k;
+    this.shownRpm += (rpm - this.shownRpm) * k;
+    const speedText = String(Math.round(this.shownSpeed));
+    const gearText = gear < 0 ? 'R' : gear === 0 ? 'N' : String(gear);
+    const hot = this.shownRpm > redline - 700;
+    // Skip the redraw when nothing visible changed (rpm quantised to ~0.25% of the dial).
+    const key = `${speedText}|${gearText}|${Math.round(this.shownRpm / 25)}|${hot}`;
+    if (key === this.lastKey) return;
+    this.lastKey = key;
+    if (!this.dial || this.dialRedline !== redline) this.buildDial(redline);
+
+    const ctx = this.ctx;
+    const { S, cx, cy, R, a0, sweep, maxRpm } = this.geometry(redline);
+    ctx.clearRect(0, 0, S, S);
+    ctx.drawImage(this.dial!, 0, 0, S, S);
+
+    const f = Math.min(1, this.shownRpm / maxRpm);
+    const end = a0 + sweep * f;
+    // Cheap glow: a wider translucent arc under the main one (shadowBlur is very slow).
+    ctx.lineCap = 'butt';
+    ctx.lineWidth = S * 0.075;
+    ctx.strokeStyle = hot ? 'rgba(255,40,30,0.3)' : 'rgba(255,120,40,0.18)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, a0, end);
+    ctx.stroke();
+    ctx.lineWidth = S * 0.045;
+    if (hot) ctx.strokeStyle = '#ff2a1f';
+    else {
+      const grad = ctx.createLinearGradient(cx - R, cy + R, cx + R, cy - R);
+      grad.addColorStop(0, '#ffc53d');
+      grad.addColorStop(1, '#ff3b2f');
+      ctx.strokeStyle = grad;
+    }
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, a0, end);
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(end) * R, cy + Math.sin(end) * R, S * 0.018, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `italic 900 ${S * 0.25}px "Saira Condensed", Rajdhani, sans-serif`;
+    ctx.fillText(speedText, cx, cy - S * 0.02);
     const gw = S * 0.14;
     const gy = cy + S * 0.25;
     ctx.fillStyle = hot ? '#ff3b2f' : 'rgba(255,255,255,0.1)';
@@ -124,7 +149,7 @@ class Speedometer {
     ctx.strokeRect(cx - gw / 2, gy - gw / 2, gw, gw);
     ctx.fillStyle = '#fff';
     ctx.font = `italic 900 ${S * 0.11}px "Saira Condensed", Rajdhani, sans-serif`;
-    ctx.fillText(gear < 0 ? 'R' : gear === 0 ? 'N' : String(gear), cx, gy + S * 0.005);
+    ctx.fillText(gearText, cx, gy + S * 0.005);
   }
 }
 
@@ -248,8 +273,18 @@ export class RaceHUD {
   private fpsAcc = 0;
   private fpsFrames = 0;
   showFps = false;
-  renderStats = { calls: 0, triangles: 0, scale: 1 };
+  renderStats = { calls: 0, triangles: 0, scale: 1, gpuMs: NaN };
   private speedoBox: HTMLElement;
+  private textCache = new Map<HTMLElement, string>();
+  private mapTimer = 0;
+
+  /** Writes to the DOM only when the value changed (avoids per-frame style/layout work). */
+  private set(el: HTMLElement, value: string, html = false): void {
+    if (this.textCache.get(el) === value) return;
+    this.textCache.set(el, value);
+    if (html) el.innerHTML = value;
+    else el.textContent = value;
+  }
   private mapBox: HTMLElement;
 
   constructor(track: TrackGeometry) {
@@ -301,6 +336,7 @@ export class RaceHUD {
 
   resetRows(): void {
     this.rows.clear();
+    this.textCache.clear();
     this.standingsEl.replaceChildren();
   }
 
@@ -309,18 +345,24 @@ export class RaceHUD {
     if (!p) return;
     const prog = p.progress;
     const n = rm.cars.length;
-    this.posEl.innerHTML = `${p.position}<span class="of">/${n}</span>`;
-    this.lapEl.innerHTML = `${prog.currentLap}<span class="of">/${rm.race.laps}</span>`;
+    this.set(this.posEl, `${p.position}<span class="of">/${n}</span>`, true);
+    this.set(this.lapEl, `${prog.currentLap}<span class="of">/${rm.race.laps}</span>`, true);
     const racing = rm.phase === 'racing' || rm.phase === 'finished';
-    this.timeEl.textContent = formatTime(racing ? (prog.finished ? prog.finishTime : rm.raceTime) : 0).replace('--:--.---', '0:00.000');
-    this.lapTimeEl.textContent = racing && !prog.finished ? formatTime(rm.raceTime - prog.lapStartTime) : '--:--.---';
-    this.bestEl.textContent = formatTime(prog.bestLapTime);
-    this.lastEl.textContent = formatTime(prog.lastLapTime);
-    this.wrongWay.classList.toggle('on', prog.wrongWay && rm.phase === 'racing');
+    this.set(this.timeEl, formatTime(racing ? (prog.finished ? prog.finishTime : rm.raceTime) : 0).replace('--:--.---', '0:00.000'));
+    this.set(this.lapTimeEl, racing && !prog.finished ? formatTime(rm.raceTime - prog.lapStartTime) : '--:--.---');
+    this.set(this.bestEl, formatTime(prog.bestLapTime));
+    this.set(this.lastEl, formatTime(prog.lastLapTime));
+    const ww = prog.wrongWay && rm.phase === 'racing';
+    if (this.wrongWay.classList.contains('on') !== ww) this.wrongWay.classList.toggle('on', ww);
 
     const ph = p.physics;
     this.speedo.draw(Math.abs(ph.forwardSpeed) * 3.6, ph.rpm, ph.def.redlineRPM, ph.gear, dt);
-    this.minimap.draw(rm.cars, p);
+    // The minimap doesn't need 60+ Hz.
+    this.mapTimer -= dt;
+    if (this.mapTimer <= 0) {
+      this.mapTimer = 1 / 30;
+      this.minimap.draw(rm.cars, p);
+    }
 
     this.standingsTimer -= dt;
     if (this.standingsTimer <= 0) {
@@ -332,7 +374,7 @@ export class RaceHUD {
       this.fpsAcc += dt;
       this.fpsFrames++;
       if (this.fpsAcc > 0.5) {
-        this.fpsEl.textContent = `${Math.round(this.fpsFrames / this.fpsAcc)} FPS · ${this.renderStats.calls} calls · ${(this.renderStats.triangles / 1e6).toFixed(2)}M tris · ${Math.round(this.renderStats.scale * 100)}% res`;
+        this.fpsEl.textContent = `${Math.round(this.fpsFrames / this.fpsAcc)} FPS · ${this.renderStats.calls} calls · ${(this.renderStats.triangles / 1e6).toFixed(2)}M tris · ${Math.round(this.renderStats.scale * 100)}% res${isFinite(this.renderStats.gpuMs) ? ` · GPU ${this.renderStats.gpuMs.toFixed(1)} ms` : ''}`;
         this.fpsAcc = 0;
         this.fpsFrames = 0;
       }
@@ -355,7 +397,7 @@ export class RaceHUD {
         this.rows.set(car, row);
       }
       if (this.standingsEl.children[i] !== row) this.standingsEl.insertBefore(row, this.standingsEl.children[i] ?? null);
-      (row.children[0] as HTMLElement).textContent = String(i + 1);
+      this.set(row.children[0] as HTMLElement, String(i + 1));
       let gap = '';
       if (car.progress.finished) gap = car === leader ? formatTime(car.progress.finishTime) : '+' + (car.progress.finishTime - leader.progress.finishTime).toFixed(2);
       else if (car === leader) gap = rm.phase === 'racing' || rm.phase === 'finished' ? 'LEADER' : '';
@@ -363,7 +405,7 @@ export class RaceHUD {
         const lapsDown = Math.floor((leader.progress.raceDistance - car.progress.raceDistance) / rm.track.length);
         gap = lapsDown >= 1 ? `+${lapsDown} LAP` : rm.phase === 'racing' || rm.phase === 'finished' ? '+' + rm.gapToLeader(car).toFixed(1) : '';
       }
-      (row.children[3] as HTMLElement).textContent = gap;
+      this.set(row.children[3] as HTMLElement, gap);
     });
   }
 }

@@ -529,8 +529,8 @@ body {
   align-items: stretch;
 }
 .hud-box {
-  background: var(--panel);
-  backdrop-filter: blur(8px);
+  /* No backdrop-filter here: re-blurring the live 3D view every frame is expensive. */
+  background: var(--panel-strong);
   border-left: 4px solid var(--accent);
   padding: calc(6px * var(--s)) calc(16px * var(--s)) calc(8px * var(--s));
   transform: skewX(-10deg);

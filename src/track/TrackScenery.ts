@@ -95,6 +95,9 @@ export class TrackScenery {
   /** Additive light pools painted on the asphalt under the floodlights. */
   private poolMat!: THREE.MeshBasicMaterial;
   private rnd: Random;
+  /** Tree chunks, culled by distance beyond the fog. */
+  private treeChunks: THREE.InstancedMesh[] = [];
+  private readonly _c = new THREE.Vector3();
 
   constructor(
     readonly track: TrackGeometry,
@@ -193,6 +196,7 @@ export class TrackScenery {
       im.receiveShadow = true;
       im.computeBoundingSphere();
       this.group.add(im);
+      this.treeChunks.push(im);
     }
 
     // Low bushes lining the outside of the barriers.
@@ -539,6 +543,16 @@ export class TrackScenery {
       const pool = new THREE.Mesh(geo, this.poolMat);
       pool.renderOrder = 3;
       this.group.add(pool);
+    }
+  }
+
+  /** Hide tree chunks that are entirely beyond `maxDistance` (fully fogged anyway). */
+  updateCulling(camera: THREE.Vector3, maxDistance: number): void {
+    for (const im of this.treeChunks) {
+      const bs = im.boundingSphere;
+      if (!bs) continue;
+      this._c.copy(bs.center);
+      im.visible = this._c.distanceTo(camera) - bs.radius < maxDistance;
     }
   }
 

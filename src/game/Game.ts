@@ -67,6 +67,7 @@ export class Game {
   private settingsReturn: 'menu' | 'pause' = 'menu';
   private resultsShown = false;
   private sessionKey = '';
+  private lastPreset: unknown = null;
 
   constructor(private readonly container: HTMLElement, uiContainer: HTMLElement) {
     this.uiRoot = h('div', { class: 'safe' });
@@ -102,8 +103,7 @@ export class Game {
     this.settings.onChange(() => this.applySettings());
     progress(0.95, 'Compiling shaders');
     this.newSession();
-    // Pre-compile materials to avoid hitches on the first frames.
-    this.renderer.renderer.compile(this.scene, this.camera);
+    this.warmUpGpu();
     progress(1, 'Ready');
     this.state.onChange((to, from) => this.onStateChange(to, from));
     this.state.set('MENU');
@@ -160,9 +160,12 @@ export class Game {
       this.env = this.createEnvironment();
     }
     const night = preset.lightsOn;
+    const changed = this.env.preset !== this.lastPreset;
+    this.lastPreset = this.env.preset;
     this.trackScene.scenery.setNight(night);
     this.session?.setNight(night);
     this.particles.setLight(preset.particleLight, night);
+    if (changed && this.state.state !== 'LOADING') this.warmUpGpu();
   }
 
   private applySettings(): void {
@@ -219,10 +222,38 @@ export class Game {
       },
     );
     this.session.setNight(this.env.isNight);
+    if (this.state.state !== 'LOADING') this.warmUpGpu();
     this.hud.resetRows();
     this.accumulator = 0;
     this.chase.snap();
     this.resultsShown = false;
+  }
+
+  /**
+   * Uploads every geometry, texture and shader to the GPU up front. WebGL otherwise uploads
+   * lazily the first time an object becomes visible, which caused 40-130 ms hitches while
+   * driving as new scenery came into view.
+   */
+  private warmUpGpu(): void {
+    const r = this.renderer.renderer;
+    this.trackScene.scenery.updateCulling(this.camera.position, Infinity);
+    const culled: THREE.Object3D[] = [];
+    this.scene.traverse((o) => {
+      if (o.frustumCulled) {
+        o.frustumCulled = false;
+        culled.push(o);
+      }
+      if (o instanceof THREE.Mesh || o instanceof THREE.Points) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          for (const v of Object.values(m)) if (v instanceof THREE.Texture) r.initTexture(v);
+        }
+      }
+    });
+    r.compile(this.scene, this.camera);
+    // One full render (all objects, shadow pass included) forces every buffer upload.
+    this.renderer.render(0, 0);
+    for (const o of culled) o.frustumCulled = true;
   }
 
   private startRace(): void {
@@ -310,6 +341,8 @@ export class Game {
       this.env.update(player.physics.position);
     }
     this.particles.update(simulate ? dt : 0, this.camera);
+    const fog = this.scene.fog as THREE.Fog;
+    this.trackScene.scenery.updateCulling(this.camera.position, fog.far);
     windUniform.value = this.elapsed;
 
     if (!this.state.is('MENU', 'LOADING')) this.hud.update(session.rm, dt);
