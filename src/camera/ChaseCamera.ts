@@ -12,6 +12,9 @@ const _desired = new THREE.Vector3();
 const _look = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _tmp = new THREE.Vector3();
+const _q = new THREE.Quaternion();
+const _fwd = new THREE.Vector3();
+const _vel = new THREE.Vector3();
 
 /**
  * Third-person chase camera with heading lag (so the car visibly rotates in slides),
@@ -55,19 +58,24 @@ export class ChaseCamera {
   update(dt: number, car: Car, alpha = 1): void {
     this.time += dt;
     const ph = car.physics;
+    // Everything the camera reads is interpolated between the last two physics steps,
+    // otherwise it moves in 120 Hz bursts that don't line up with the display refresh.
     const carPos = _tmp.copy(car.prevPosition).lerp(ph.position, alpha);
-    const speed = ph.speed;
+    const q = _q.copy(car.prevQuaternion).slerp(ph.quaternion, alpha);
+    const fwd = _fwd.set(0, 0, 1).applyQuaternion(q);
+    const vel = _vel.copy(car.prevVelocity).lerp(ph.velocity, alpha);
+    const speed = vel.length();
+    const fwdSpeed = vel.dot(fwd);
     const speedT = clamp(speed / 70, 0, 1);
 
-    const fwd = ph.forward;
     const carYaw = Math.atan2(fwd.x, fwd.z);
     // Blend toward the velocity direction when moving so the camera looks where the car goes.
     let targetYaw = carYaw;
-    if (speed > 4 && ph.forwardSpeed > 0) {
-      const vYaw = Math.atan2(ph.velocity.x, ph.velocity.z);
+    if (speed > 4 && fwdSpeed > 0) {
+      const vYaw = Math.atan2(vel.x, vel.z);
       targetYaw = carYaw + wrapAngle(vYaw - carYaw) * 0.45;
     }
-    if (ph.forwardSpeed < -2) targetYaw = carYaw; // reversing: stay behind
+    if (fwdSpeed < -2) targetYaw = carYaw; // reversing: stay behind
 
     if (!this.initialized) {
       this.yaw = targetYaw;
@@ -78,7 +86,7 @@ export class ChaseCamera {
     this.yaw += wrapAngle(targetYaw - this.yaw) * (1 - Math.exp(-(this.mode === 'far' ? 3.2 : 4.2) * dt));
 
     if (this.mode === 'hood') {
-      _desired.set(0, 0.52, 0.55).applyQuaternion(ph.quaternion).add(carPos);
+      _desired.set(0, 0.52, 0.55).applyQuaternion(q).add(carPos);
       this.pos.copy(_desired);
       _look.copy(fwd).multiplyScalar(20).add(_desired);
       _look.y -= 0.6;

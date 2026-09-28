@@ -57,6 +57,9 @@ export class RaceSession {
   private fx = new Map<Car, CarFx>();
   private unsubscribe: () => void;
   private time = 0;
+  private otherA = { rpm: 0, load: 0, distance: 0, pan: 0 };
+  private otherB = { rpm: 0, load: 0, distance: 0, pan: 0 };
+  private othersBuf: { rpm: number; load: number; distance: number; pan: number }[] = [];
 
   constructor(
     private readonly svc: SessionServices,
@@ -233,17 +236,34 @@ export class RaceSession {
     if (p) {
       const cam = this.svc.camera.camera;
       const right = _v.set(1, 0, 0).applyQuaternion(cam.quaternion);
-      const others = this.rm.cars
-        .filter((c) => c !== p)
-        .map((c) => ({ c, d: c.physics.position.distanceTo(cam.position) }))
-        .sort((a, b) => a.d - b.d)
-        .slice(0, 2)
-        .map(({ c, d }) => ({
-          rpm: c.physics.rpm,
-          load: c.physics.engineLoad,
-          distance: d,
-          pan: Math.max(-1, Math.min(1, _p.copy(c.physics.position).sub(cam.position).normalize().dot(right))),
-        }));
+      // Two nearest opponents, found without allocating arrays every frame.
+      let n0: Car | null = null;
+      let n1: Car | null = null;
+      let d0 = Infinity;
+      let d1 = Infinity;
+      for (const c of this.rm.cars) {
+        if (c === p) continue;
+        const d = c.physics.position.distanceTo(cam.position);
+        if (d < d0) {
+          n1 = n0;
+          d1 = d0;
+          n0 = c;
+          d0 = d;
+        } else if (d < d1) {
+          n1 = c;
+          d1 = d;
+        }
+      }
+      const others = this.othersBuf;
+      others.length = 0;
+      for (const [c, d, slot] of [[n0, d0, this.otherA], [n1, d1, this.otherB]] as const) {
+        if (!c) continue;
+        slot.rpm = c.physics.rpm;
+        slot.load = c.physics.engineLoad;
+        slot.distance = d;
+        slot.pan = Math.max(-1, Math.min(1, _p.copy(c.physics.position).sub(cam.position).normalize().dot(right)));
+        others.push(slot);
+      }
       audio.updateDriving({
         rpm: p.physics.rpm,
         load: p.physics.enabled ? p.physics.engineLoad : Math.min(1, this.svc.input.throttle),

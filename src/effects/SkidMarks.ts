@@ -24,6 +24,9 @@ export class SkidMarks {
   private readonly geo: THREE.BufferGeometry;
   private trails = new Map<number, Trail>();
   private dirty = false;
+  private dirtyMin = Infinity;
+  private dirtyMax = -1;
+  private fullUpload = false;
 
   constructor(capacity = 4000) {
     this.cap = capacity;
@@ -86,6 +89,8 @@ export class SkidMarks {
         const c = q * 16;
         this.col.set([1, 1, 1, tr.a, 1, 1, 1, tr.a, 1, 1, 1, a, 1, 1, 1, a], c);
         this.dirty = true;
+        this.dirtyMin = Math.min(this.dirtyMin, q);
+        this.dirtyMax = Math.max(this.dirtyMax, q);
       }
     }
     tr.active = true;
@@ -100,9 +105,22 @@ export class SkidMarks {
 
   update(): void {
     if (!this.dirty) return;
-    this.geo.attributes.position.needsUpdate = true;
-    this.geo.attributes.color.needsUpdate = true;
+    const pos = this.geo.attributes.position as THREE.BufferAttribute;
+    const col = this.geo.attributes.color as THREE.BufferAttribute;
+    // Upload only the quads written since last frame instead of the whole ~450 KB buffer.
+    pos.clearUpdateRanges();
+    col.clearUpdateRanges();
+    if (!this.fullUpload) {
+      const n = this.dirtyMax - this.dirtyMin + 1;
+      pos.addUpdateRange(this.dirtyMin * 12, n * 12);
+      col.addUpdateRange(this.dirtyMin * 16, n * 16);
+    }
+    pos.needsUpdate = true;
+    col.needsUpdate = true;
     this.dirty = false;
+    this.fullUpload = false;
+    this.dirtyMin = Infinity;
+    this.dirtyMax = -1;
   }
 
   clear(): void {
@@ -110,5 +128,6 @@ export class SkidMarks {
     this.col.fill(0);
     this.trails.clear();
     this.dirty = true;
+    this.fullUpload = true;
   }
 }

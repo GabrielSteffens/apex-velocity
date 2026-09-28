@@ -149,7 +149,7 @@ export class Game {
   private applySettings(): void {
     const s = this.settings.values;
     this.renderer.setQuality(s.quality);
-    this.env.setShadowQuality(s.quality === 'high' ? 4096 : s.quality === 'medium' ? 2048 : 1024);
+    this.env.setShadowQuality(s.quality === 'low' ? 1024 : 2048);
     this.env.setShadowExtent(s.quality === 'high' ? 80 : 60);
     this.audio.setVolume(s.volume);
     this.hud.showFps = s.showFps;
@@ -254,7 +254,9 @@ export class Game {
 
   private loop = (now: number): void => {
     requestAnimationFrame(this.loop);
-    const dt = Math.min(0.1, (now - this.lastTime) / 1000) * this.timeScale;
+    const frameMs = now - this.lastTime;
+    const dt = Math.min(0.1, frameMs / 1000) * this.timeScale;
+    if (!this.state.is('LOADING', 'PAUSED')) this.renderer.adaptResolution(frameMs, dt);
     this.lastTime = now;
     this.elapsed += dt;
     this.input.poll();

@@ -248,7 +248,7 @@ export class RaceHUD {
   private fpsAcc = 0;
   private fpsFrames = 0;
   showFps = false;
-  renderStats = { calls: 0, triangles: 0 };
+  renderStats = { calls: 0, triangles: 0, scale: 1 };
   private speedoBox: HTMLElement;
   private mapBox: HTMLElement;
 
@@ -332,7 +332,7 @@ export class RaceHUD {
       this.fpsAcc += dt;
       this.fpsFrames++;
       if (this.fpsAcc > 0.5) {
-        this.fpsEl.textContent = `${Math.round(this.fpsFrames / this.fpsAcc)} FPS · ${this.renderStats.calls} calls · ${(this.renderStats.triangles / 1e6).toFixed(2)}M tris`;
+        this.fpsEl.textContent = `${Math.round(this.fpsFrames / this.fpsAcc)} FPS · ${this.renderStats.calls} calls · ${(this.renderStats.triangles / 1e6).toFixed(2)}M tris · ${Math.round(this.renderStats.scale * 100)}% res`;
         this.fpsAcc = 0;
         this.fpsFrames = 0;
       }

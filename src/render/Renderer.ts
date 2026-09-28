@@ -4,6 +4,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js';
 
 export type Quality = 'low' | 'medium' | 'high';
 
@@ -60,7 +61,12 @@ export class Renderer {
   readonly renderPass: RenderPass;
   readonly bloom: UnrealBloomPass;
   readonly finalPass: ShaderPass;
+  readonly fxaa: ShaderPass;
   private quality: Quality = 'high';
+  /** Dynamic resolution multiplier (0.55..1), driven by measured frame time. */
+  private renderScale = 1;
+  private frameTimeAvg = 16.7;
+  private scaleCooldown = 2;
   private width = 1;
   private height = 1;
 
@@ -80,7 +86,9 @@ export class Renderer {
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.classList.add('game-canvas');
 
-    const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+    // No MSAA: a multisampled HDR target cost ~20 ms/frame on integrated GPUs. FXAA below
+    // gives clean edges for ~1 ms instead.
+    const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 0 });
     this.composer = new EffectComposer(this.renderer, rt);
     this.renderPass = new RenderPass(scene, camera);
     this.composer.addPass(this.renderPass);
@@ -89,6 +97,8 @@ export class Renderer {
     this.composer.addPass(new OutputPass());
     this.finalPass = new ShaderPass(FinalShader);
     this.composer.addPass(this.finalPass);
+    this.fxaa = new ShaderPass(FXAAShader);
+    this.composer.addPass(this.fxaa);
 
     window.addEventListener('resize', () => this.resize());
     this.resize();
@@ -97,6 +107,7 @@ export class Renderer {
   setQuality(q: Quality): void {
     this.quality = q;
     this.bloom.enabled = q !== 'low';
+    this.fxaa.enabled = q !== 'low';
     this.resize();
   }
 
@@ -106,7 +117,8 @@ export class Renderer {
 
   get pixelRatio(): number {
     const dpr = window.devicePixelRatio || 1;
-    return this.quality === 'high' ? Math.min(dpr, 1.75) : this.quality === 'medium' ? Math.min(dpr, 1.25) : Math.min(dpr, 0.85);
+    const base = this.quality === 'high' ? Math.min(dpr, 1.5) : this.quality === 'medium' ? Math.min(dpr, 1) : Math.min(dpr, 0.75);
+    return base * this.renderScale;
   }
 
   resize(): void {
@@ -119,8 +131,35 @@ export class Renderer {
     this.composer.setSize(this.width, this.height);
     // Bloom at reduced resolution is plenty and much cheaper.
     this.bloom.setSize((this.width * pr) / 2, (this.height * pr) / 2);
+    this.fxaa.material.uniforms.resolution.value.set(1 / (this.width * pr), 1 / (this.height * pr));
     this.camera.aspect = this.width / this.height;
     this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * Dynamic resolution: lowers the internal resolution when frames take too long and
+   * raises it again when there is headroom, so weak GPUs stay smooth instead of stuttering.
+   */
+  adaptResolution(frameMs: number, dt: number): void {
+    // Ignore huge spikes (tab switches, loading) so they don't skew the average.
+    if (frameMs > 100) return;
+    this.frameTimeAvg += (frameMs - this.frameTimeAvg) * 0.05;
+    this.scaleCooldown -= dt;
+    if (this.scaleCooldown > 0) return;
+    let next = this.renderScale;
+    if (this.frameTimeAvg > 19) next = Math.max(0.55, this.renderScale - 0.1);
+    else if (this.frameTimeAvg < 17.5 && this.renderScale < 1) next = Math.min(1, this.renderScale + 0.05);
+    if (next !== this.renderScale) {
+      this.renderScale = next;
+      this.resize();
+      this.scaleCooldown = 2.5;
+    } else {
+      this.scaleCooldown = 0.5;
+    }
+  }
+
+  get resolutionScale(): number {
+    return this.renderScale;
   }
 
   get aspect(): number {
@@ -134,7 +173,7 @@ export class Renderer {
     this.composer.render();
   }
 
-  get stats(): { calls: number; triangles: number } {
-    return { calls: this.renderer.info.render.calls, triangles: this.renderer.info.render.triangles };
+  get stats(): { calls: number; triangles: number; scale: number } {
+    return { calls: this.renderer.info.render.calls, triangles: this.renderer.info.render.triangles, scale: this.renderScale };
   }
 }

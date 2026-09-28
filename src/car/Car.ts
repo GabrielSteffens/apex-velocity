@@ -19,6 +19,7 @@ export class Car {
   /** Transform at the previous physics step, for render interpolation. */
   readonly prevPosition = new THREE.Vector3();
   readonly prevQuaternion = new THREE.Quaternion();
+  readonly prevVelocity = new THREE.Vector3();
   position = 0;
   resetCooldown = 0;
 
@@ -42,6 +43,7 @@ export class Car {
   storePrevious(): void {
     this.prevPosition.copy(this.physics.position);
     this.prevQuaternion.copy(this.physics.quaternion);
+    this.prevVelocity.copy(this.physics.velocity);
   }
 
   /** Put the car back on the racing surface at its current track position. */
