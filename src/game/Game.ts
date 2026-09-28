@@ -12,6 +12,7 @@ import { AudioManager } from '../audio/AudioManager';
 import { ParticleManager } from '../effects/ParticleManager';
 import { SkidMarks } from '../effects/SkidMarks';
 import { windUniform } from '../track/TrackScenery';
+import { freezeStatic } from '../render/merge';
 import { getTrack } from '../data/tracks';
 import { getCar } from '../data/cars';
 import { createQuickRace } from '../data/races';
@@ -99,6 +100,8 @@ export class Game {
     this.env = this.createEnvironment();
     this.trackScene = await TrackScene.create(trackDef, this.physics, progress);
     this.scene.add(this.trackScene.group);
+    // Track and scenery never move: compute their matrices once.
+    freezeStatic(this.trackScene.group);
     this.chase = new ChaseCamera(this.camera, this.physics, this.trackScene.terrain);
     this.particles = new ParticleManager(this.scene.fog as THREE.Fog);
     this.scene.add(this.particles.group);

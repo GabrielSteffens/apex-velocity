@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { CarDefinition } from '../data/types';
 import { CarPhysics } from './CarPhysics';
 import * as tex from '../render/textures';
-import { mergeByMaterial } from '../render/merge';
+import { mergeByMaterial, paintVertices, vertexFinishMaterial } from '../render/merge';
 
 export interface CarModelParts {
   root: THREE.Group;
@@ -14,7 +14,6 @@ export interface CarModelParts {
   brakeLightMat: THREE.MeshStandardMaterial;
   reverseLightMat: THREE.MeshStandardMaterial;
   headLightMat: THREE.MeshStandardMaterial;
-  shadow: THREE.Mesh;
   /** Exhaust tip positions in car space. */
   exhausts: THREE.Vector3[];
   paint: THREE.MeshPhysicalMaterial;
@@ -65,7 +64,10 @@ function extrudeProfile(points: P[], width: number, bevel: number, taper: (x: nu
  * Builds an original mid-engined sports car from procedural geometry.
  * Car space: +Z forward, +X left, origin at the physics body origin.
  */
-export function buildCarModel(def: CarDefinition, color: number, number: number): CarModelParts {
+/**
+ * @param detailed extra close-up details (brake calipers) — used for the player's car only.
+ */
+export function buildCarModel(def: CarDefinition, color: number, number: number, detailed = true): CarModelParts {
   const d = def.dimensions;
   const G = -CarPhysics.restHeight(def); // ground height in car space
   const L = d.length / 2;
@@ -318,10 +320,25 @@ export function buildCarModel(def: CarDefinition, color: number, number: number)
 
   // Only the big shapes cast shadows; lamps, decals and trim don't need a shadow pass.
   const noShadow = new Set<THREE.Material>([headLightMat, brakeLightMat, reverseLightMat, decalMat, chrome, accent]);
+  // Consolidate materials so the whole body is ~7 draw calls: paint + accent stripes share
+  // one clearcoat material (colour per vertex); carbon, black trim and chrome share one
+  // material with per-vertex metalness/roughness.
+  const paintVC = new THREE.MeshPhysicalMaterial({ color: 0xffffff, vertexColors: true, metalness: 0.5, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.06 });
+  const trimVC = vertexFinishMaterial();
   body.traverse((o) => {
-    if (o instanceof THREE.Mesh) {
-      o.castShadow = !noShadow.has(o.material as THREE.Material);
-      o.receiveShadow = true;
+    if (!(o instanceof THREE.Mesh)) return;
+    o.castShadow = !noShadow.has(o.material as THREE.Material);
+    o.receiveShadow = true;
+    const m = o.material as THREE.Material;
+    if (m === paint || m === accent) {
+      o.geometry = paintVertices(o.geometry.clone(), (m as THREE.MeshPhysicalMaterial).color);
+      o.material = paintVC;
+    } else if (m === carbon) {
+      o.geometry = paintVertices(o.geometry.clone(), carbon.color, 0.4, 0.45);
+      o.material = trimVC;
+    } else if (m === chrome) {
+      o.geometry = paintVertices(o.geometry.clone(), chrome.color, 1, 0.2);
+      o.material = trimVC;
     }
   });
   mergeByMaterial(body);
@@ -342,9 +359,13 @@ export function buildCarModel(def: CarDefinition, color: number, number: number)
     [0.2, 0.13],
   ].map(([r, y]) => new THREE.Vector2(r * (d.wheelRadius / 0.34), y));
   const tireGeo = new THREE.LatheGeometry(tireProfile, 28).rotateZ(Math.PI / 2);
-  const tireMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.88 });
-  const rimMat = new THREE.MeshStandardMaterial({ color: def.style.rimColor, metalness: 0.9, roughness: 0.28 });
+  // Tyre, rim, spokes, hub and disc: one mesh per wheel (per-vertex colour and finish).
+  const wheelMat = vertexFinishMaterial();
+  const tireMat = wheelMat;
+  const rimMat = wheelMat;
   const caliperMat = new THREE.MeshStandardMaterial({ color: 0xe8b21f, roughness: 0.4, metalness: 0.2 });
+  const finish = (g: THREE.BufferGeometry, rim: boolean) =>
+    rim ? paintVertices(g.clone(), def.style.rimColor, 0.9, 0.28) : paintVertices(g.clone(), 0x151515, 0, 0.88);
   const rimR = d.wheelRadius * 0.64;
   const barrel = new THREE.CylinderGeometry(rimR, rimR, 0.24, 24, 1, true).rotateZ(Math.PI / 2);
   const spokeGeo = new THREE.BoxGeometry(0.035, rimR * 0.95, 0.05);
@@ -365,33 +386,35 @@ export function buildCarModel(def: CarDefinition, color: number, number: number)
     pivot.position.set(x, G + d.wheelRadius, z);
     const outward = Math.sign(x); // +1 for left side (+X)
     const spinner = new THREE.Group();
-    const tire = new THREE.Mesh(tireGeo, tireMat);
+    const tire = new THREE.Mesh(finish(tireGeo, false), tireMat);
     spinner.add(tire);
-    const rim = new THREE.Mesh(barrel, rimMat);
+    const rim = new THREE.Mesh(finish(barrel, true), rimMat);
     spinner.add(rim);
     const face = new THREE.Group();
     for (let k = 0; k < 5; k++) {
-      const spoke = new THREE.Mesh(spokeGeo, rimMat);
+      const spoke = new THREE.Mesh(finish(spokeGeo, true), rimMat);
       spoke.rotation.x = (k / 5) * Math.PI * 2;
       face.add(spoke);
-      const spoke2 = new THREE.Mesh(spokeGeo, rimMat);
+      const spoke2 = new THREE.Mesh(finish(spokeGeo, true), rimMat);
       spoke2.rotation.x = (k / 5) * Math.PI * 2 + 0.18;
       spoke2.scale.set(0.8, 1, 0.7);
       face.add(spoke2);
     }
-    face.add(new THREE.Mesh(hubGeo, rimMat));
-    face.add(new THREE.Mesh(lipGeo, rimMat));
+    face.add(new THREE.Mesh(finish(hubGeo, true), rimMat));
+    face.add(new THREE.Mesh(finish(lipGeo, true), rimMat));
     face.position.x = outward * 0.085;
     spinner.add(face);
     pivot.add(spinner);
     // Brake disc (spins) and caliper (fixed)
-    const disc = new THREE.Mesh(discGeo, rimMat);
+    const disc = new THREE.Mesh(finish(discGeo, true), rimMat);
     disc.position.x = outward * 0.02;
     spinner.add(disc);
+    if (detailed) {
     const caliper = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.12, 0.09), caliperMat);
     caliper.position.set(outward * 0.035, rimR * 0.62, -0.07);
     caliper.rotation.x = -0.5;
     pivot.add(caliper);
+    }
     pivot.traverse((o) => {
       if (o instanceof THREE.Mesh) {
         o.castShadow = o.material !== caliperMat;
@@ -404,14 +427,5 @@ export function buildCarModel(def: CarDefinition, color: number, number: number)
     wheelSpinners.push(spinner);
   });
 
-  // Soft contact shadow
-  const shadow = new THREE.Mesh(
-    new THREE.PlaneGeometry(W + 0.9, d.length + 1.1).rotateX(-Math.PI / 2),
-    new THREE.MeshBasicMaterial({ map: tex.radialGradient('rgba(0,0,0,0.85)', 'rgba(0,0,0,0)'), transparent: true, depthWrite: false, opacity: 0.75 }),
-  );
-  shadow.position.y = G + 0.03;
-  shadow.renderOrder = 2;
-  root.add(shadow);
-
-  return { root, body, wheelPivots, wheelSpinners, brakeLightMat, reverseLightMat, headLightMat, shadow, exhausts, paint };
+  return { root, body, wheelPivots, wheelSpinners, brakeLightMat, reverseLightMat, headLightMat, exhausts, paint };
 }

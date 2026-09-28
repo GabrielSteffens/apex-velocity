@@ -13,6 +13,7 @@ import type { ParticleManager } from '../effects/ParticleManager';
 import type { SkidMarks } from '../effects/SkidMarks';
 import type { ChaseCamera } from '../camera/ChaseCamera';
 import type { Car } from '../car/Car';
+import { CarGroundFx } from '../effects/CarGroundFx';
 
 export interface SessionServices {
   scene: THREE.Scene;
@@ -54,6 +55,7 @@ interface CarFx {
 export class RaceSession {
   readonly rm: RaceManager;
   private visuals: CarVisual[] = [];
+  private groundFx: CarGroundFx;
   private fx = new Map<Car, CarFx>();
   private unsubscribe: () => void;
   private time = 0;
@@ -76,6 +78,8 @@ export class RaceSession {
       this.fx.set(car, { lastGear: 1, smokeAcc: 0, exhaustAcc: 0, lastImpact: 0 });
     });
     ts.scenery.setStartLights(0, false);
+    this.groundFx = new CarGroundFx(this.rm.cars);
+    svc.scene.add(this.groundFx.group);
 
     const byCollider = new Map(this.rm.cars.map((c) => [c.physics.collider.handle, c]));
     const barriers = ts.colliders.barrierHandles;
@@ -126,6 +130,7 @@ export class RaceSession {
   /** Headlights on/off for every car (real spotlight only on the player's car). */
   setNight(on: boolean): void {
     for (const v of this.visuals) v.setNight(on, v.car.isPlayer);
+    this.groundFx.setNight(on);
   }
 
   get player(): Car | null {
@@ -236,6 +241,7 @@ export class RaceSession {
       f.lastGear = ph.gear;
     }
     skids.update();
+    this.groundFx.update();
 
     // Audio mix
     const p = this.rm.player;
@@ -287,6 +293,7 @@ export class RaceSession {
 
   dispose(): void {
     this.unsubscribe();
+    this.groundFx.dispose();
     this.rm.dispose();
     this.visuals = [];
     this.svc.skids.clear();

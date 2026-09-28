@@ -259,6 +259,7 @@ export class Environment {
       g.setIndex(idx);
       const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, side: THREE.DoubleSide }));
       m.renderOrder = -1;
+      m.matrixAutoUpdate = false; // static
       this.group.add(m);
     }
   }

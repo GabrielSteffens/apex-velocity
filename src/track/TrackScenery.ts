@@ -638,6 +638,7 @@ export class TrackScenery {
       { text: 'ORBITA', sub: 'AEROSPACE', bg: '#1a1a2e', fg: '#8fd3ff', accent: '#8fd3ff' },
     ];
     const legMat = new THREE.MeshStandardMaterial({ color: 0x3a3d42, metalness: 0.6, roughness: 0.5 });
+    const billboardMats = new Map<tex.SignSpec, THREE.MeshStandardMaterial>();
     const frameMat = new THREE.MeshStandardMaterial({ color: 0x1b1d20, roughness: 0.6 });
     let k = 0;
     for (let s = 60; s < t.length - 250; s += 95) {
@@ -655,10 +656,9 @@ export class TrackScenery {
       // Angle the board slightly toward oncoming traffic.
       g.rotation.y = f.yaw + side * 0.35;
       const spec = specs[k % specs.length];
-      const board = new THREE.Mesh(
-        new THREE.PlaneGeometry(12, 3),
-        new THREE.MeshStandardMaterial({ map: tex.signTexture(spec), roughness: 0.55 }),
-      );
+      let bmat = billboardMats.get(spec);
+      if (!bmat) billboardMats.set(spec, (bmat = new THREE.MeshStandardMaterial({ map: tex.signTexture(spec), roughness: 0.55 })));
+      const board = new THREE.Mesh(new THREE.PlaneGeometry(12, 3), bmat);
       board.position.set(0, 4.2, 0.08);
       const back = new THREE.Mesh(new THREE.BoxGeometry(12.4, 3.4, 0.15), frameMat);
       back.position.set(0, 4.2, 0);
@@ -670,7 +670,7 @@ export class TrackScenery {
       }
       g.traverse((o) => {
         if (o instanceof THREE.Mesh) {
-          o.castShadow = true;
+          o.castShadow = o !== board; // the backing frame already casts the board's shadow
           o.receiveShadow = true;
         }
       });
@@ -692,7 +692,13 @@ export class TrackScenery {
       for (let d = -20; d <= 20; d++) if (Math.abs(this.line.curvature[(i + d + n) % n]) > k) isMax = false;
       if (isMax) apexes.push(i);
     }
-    const boardMat = (m: THREE.Texture) => new THREE.MeshStandardMaterial({ map: m, roughness: 0.5, side: THREE.DoubleSide });
+    // One material per texture so identical boards merge into a single draw call.
+    const boardMats = new Map<THREE.Texture, THREE.MeshStandardMaterial>();
+    const boardMat = (m: THREE.Texture) => {
+      let mat = boardMats.get(m);
+      if (!mat) boardMats.set(m, (mat = new THREE.MeshStandardMaterial({ map: m, roughness: 0.5, side: THREE.DoubleSide })));
+      return mat;
+    };
     const postMat = new THREE.MeshStandardMaterial({ color: 0x505358, metalness: 0.5, roughness: 0.5 });
     for (const i of apexes) {
       const sApex = i * t.spacing;
@@ -710,7 +716,6 @@ export class TrackScenery {
         board.position.y += 1.7;
         // Face oncoming cars (looking back along the track), angled toward the centre.
         board.rotation.y = f.tangentYaw + Math.PI - outside * 0.4;
-        board.castShadow = true;
         this.group.add(board);
         const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.2, 0.12), postMat);
         post.position.copy(f.pos);
@@ -745,7 +750,6 @@ export class TrackScenery {
           board.position.copy(f.pos);
           board.position.y += 2.0;
           board.rotation.y = f.tangentYaw + Math.PI - outside * 0.3;
-          board.castShadow = true;
           this.group.add(board);
           const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.4, 0.12), postMat);
           post.position.copy(f.pos);
