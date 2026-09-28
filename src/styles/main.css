@@ -770,3 +770,29 @@ body {
     --s: 0.7;
   }
 }
+
+/* ---------------------------------------------------------------- Build version */
+.menu .version {
+  position: absolute;
+  right: calc(56px * var(--s));
+  top: calc(28px * var(--s));
+  padding: 4px 10px;
+  background: rgba(10, 11, 14, 0.55);
+  border: 1px solid var(--line);
+  font-size: calc(13px * var(--s));
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+  user-select: text;
+}
+.version-inline {
+  margin-top: 18px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+  user-select: text;
+}

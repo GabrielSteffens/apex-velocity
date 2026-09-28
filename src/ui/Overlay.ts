@@ -1,4 +1,5 @@
 import { h } from './dom';
+import { versionLabel } from '../version';
 
 /** Big centre-screen countdown numbers. */
 export class Countdown {
@@ -45,6 +46,7 @@ export class LoadingScreen {
       h('div', { class: 'logo', html: '<span class="a">Apex</span> <span class="b">Velocity</span>' }),
       h('div', { class: 'bar' }, this.bar),
       this.status,
+      h('div', { class: 'version-inline' }, versionLabel()),
     );
   }
 

@@ -1,5 +1,6 @@
 import { h } from './dom';
 import { NavList } from './NavList';
+import { versionLabel } from '../version';
 import type { AudioManager } from '../audio/AudioManager';
 import type { Input } from '../core/Input';
 
@@ -21,7 +22,7 @@ export class PauseMenu {
     this.el = h(
       'div',
       { class: 'screen modal interactive' },
-      h('div', { class: 'panel' }, h('h2', {}, h('small', {}, 'Race Paused'), 'Paused'), h('div', { class: 'menu-list' }, ...buttons)),
+      h('div', { class: 'panel' }, h('h2', {}, h('small', {}, 'Race Paused'), 'Paused'), h('div', { class: 'menu-list' }, ...buttons), h('div', { class: 'version-inline' }, versionLabel())),
     );
     this.nav = new NavList(buttons, audio);
   }

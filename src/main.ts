@@ -1,5 +1,8 @@
 import './styles/main.css';
 import { Game } from './game/Game';
+import { VERSION, versionLabel } from './version';
+
+console.info(`Apex Velocity ${versionLabel()}`);
 
 const viewport = document.getElementById('viewport')!;
 const ui = document.getElementById('ui')!;
@@ -14,4 +17,5 @@ game.init().catch((err) => {
 });
 
 // Expose for debugging in the console.
-(window as unknown as { game: Game }).game = game;
+(window as unknown as { game: Game; version: typeof VERSION }).game = game;
+(window as unknown as { version: typeof VERSION }).version = VERSION;

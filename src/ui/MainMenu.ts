@@ -1,5 +1,6 @@
 import { h } from './dom';
 import { NavList } from './NavList';
+import { versionLabel } from '../version';
 import type { AudioManager } from '../audio/AudioManager';
 import type { Input } from '../core/Input';
 import type { CarDefinition, TrackDefinition } from '../data/types';
@@ -63,6 +64,7 @@ export class MainMenu {
           h('div', { class: 'sub', style: 'margin-top:10px;max-width:320px;line-height:1.35' }, track.description),
         ),
       ),
+      h('div', { class: 'version', title: 'Versão · commit · data do build' }, versionLabel()),
       h(
         'div',
         { class: 'footer', html: '<span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> drive &nbsp; <span class="key">Space</span> handbrake &nbsp; <span class="key">R</span> reset &nbsp; <span class="key">C</span> camera &nbsp; <span class="key">Esc</span> pause &nbsp; · &nbsp; Gamepad supported' },
