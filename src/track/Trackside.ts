@@ -174,7 +174,7 @@ export class Trackside {
       const side = k % 2 === 0 ? 1 : -1;
       const lat = side * (bo + 4);
       const p = t.offsetPoint(s, lat, new THREE.Vector3());
-      if (t.distanceToCenterline(p.x, p.z) < bo + 2) continue;
+      if (t.distanceToCenterline(p.x, p.z) < bo + 2 || this.layout.nearShortcut(p.x, p.z, 4)) continue;
       const f = this.frame(s, lat);
       const g = new THREE.Group();
       g.position.copy(f.pos);

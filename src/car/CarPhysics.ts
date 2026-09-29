@@ -4,11 +4,19 @@ import type { CarDefinition } from '../data/types';
 import { GROUP, groups, SURFACES, type PhysicsWorld, type SurfaceType } from '../physics/PhysicsWorld';
 import { clamp, lerp, moveTowards } from '../core/math';
 
+function wrapPi(a: number): number {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
 export interface CarInput {
   throttle: number; // 0..1
   brake: number; // 0..1 (also reverse when stopped)
   steer: number; // -1 (left) .. 1 (right)
   handbrake: boolean;
+  /** Arcade drift button: at speed + steering, starts a controlled, boost-charging drift. */
+  drift?: boolean;
   /** True when steer comes from an analog stick (already smooth: less filtering needed). */
   analog?: boolean;
 }
@@ -96,6 +104,33 @@ export class CarPhysics {
   enabled = true;
   /** 0..1 aerodynamic tow from a car ahead (set by the race manager). */
   slipstream = 0;
+
+  // ---------- Arcade layer ----------
+  /** In a controlled (assisted) drift. */
+  drifting = false;
+  /** +1 drifting right, -1 left. */
+  driftDir = 0;
+  driftTime = 0;
+  /** Seconds of good drifting accumulated; thresholds give levels 1..3. */
+  driftCharge = 0;
+  driftLevel = 0;
+  /** Seconds left of the assisted straighten-up after a drift ends. */
+  private driftRecover = 0;
+  /** Set when a drift ends; consumed (and cleared) by the race session. */
+  driftReleased: { level: number; time: number } | null = null;
+  /** Signed body slip angle (radians; negative = nose right of travel). */
+  bodySlip = 0;
+  boostTime = 0;
+  private boostAccel = 0;
+  /** Overdrive item: more power and speed, less steering and grip. */
+  overdriveTime = 0;
+  /** Set on touchdown after a jump (seconds airborne); consumed by the race session. */
+  landed = 0;
+  /** Seconds since the last jump landing. */
+  sinceLanding = 99;
+  /** Spinning out after a hit (missile / oil / EMP): no control. */
+  stunTime = 0;
+  private stunSpin = 0;
 
   private readonly mass: number;
   private readonly springK: number;
@@ -207,6 +242,38 @@ export class CarPhysics {
     this.syncState();
   }
 
+  static readonly DRIFT_LEVELS = [0.9, 2.0, 3.3];
+  static readonly DRIFT_BOOST = [0, 0.8, 1.3, 2.0];
+
+  /** Speed boost: `seconds` of extra thrust (stacks by taking the longer / stronger one). */
+  boost(seconds: number, accel = 12): void {
+    accel *= this.def.arcade?.boostPower ?? 1;
+    this.boostTime = Math.max(this.boostTime, seconds);
+    this.boostAccel = Math.max(this.boostTime > seconds ? this.boostAccel : 0, accel);
+  }
+
+  /** Spin out for `seconds` (hit by an item). */
+  stun(seconds: number, dir = Math.random() < 0.5 ? -1 : 1): void {
+    this.stunTime = Math.max(this.stunTime, seconds);
+    this.stunSpin = dir * 7.5;
+    this.boostTime = 0;
+    this.overdriveTime = 0;
+    this.endDrift(false);
+  }
+
+  /** Ends the current drift; charged drifts release a mini-turbo. */
+  endDrift(reward = true): void {
+    if (!this.drifting) return;
+    this.drifting = false;
+    this.driftRecover = 0.45;
+    const level = reward && this.surface !== 'grass' ? this.driftLevel : 0;
+    if (level > 0) this.boost(CarPhysics.DRIFT_BOOST[level], 11);
+    this.driftReleased = { level, time: this.driftTime };
+    this.driftCharge = 0;
+    this.driftLevel = 0;
+    this.driftTime = 0;
+  }
+
   /** Height from the body origin to the ground when resting on its suspension. */
   static restHeight(def: CarDefinition): number {
     const w = (2 * Math.PI * def.suspension.frequency) ** 2;
@@ -237,6 +304,13 @@ export class CarPhysics {
     this.gear = 1;
     this.upsideDownTime = 0;
     this.airTime = 0;
+    this.drifting = false;
+    this.driftRecover = 0;
+    this.driftCharge = 0;
+    this.driftLevel = 0;
+    this.boostTime = 0;
+    this.overdriveTime = 0;
+    this.stunTime = 0;
     for (const w of this.wheels) {
       w.compression = w.prevCompression = 0;
       w.spinSpeed = 0;
@@ -253,7 +327,7 @@ export class CarPhysics {
     const lowSpeedLock = lerp(0.5, 0.6, h);
     const v = Math.max(Math.abs(speed), 1);
     const gripLimited = (this.def.dimensions.wheelBase * this.def.grip * 9.81) / (v * v) + lerp(0.1, 0.14, h);
-    return Math.min(lowSpeedLock, gripLimited * 1.1);
+    return Math.min(lowSpeedLock, gripLimited * 1.1) * (this.overdriveTime > 0 ? 0.62 : 1);
   }
 
   step(dt: number): void {
@@ -281,7 +355,13 @@ export class CarPhysics {
 
     // ---------- Inputs ----------
     const inp = this.input;
-    const enabled = this.enabled;
+    this.sinceLanding += dt;
+    this.boostTime = Math.max(0, this.boostTime - dt);
+    this.overdriveTime = Math.max(0, this.overdriveTime - dt);
+    this.stunTime = Math.max(0, this.stunTime - dt);
+    const stunned = this.stunTime > 0;
+    const enabled = this.enabled && !stunned;
+    const boosting = this.boostTime > 0;
     const steerTarget = enabled ? clamp(inp.steer, -1, 1) : 0;
     // Digital (keyboard) steering ramps in quickly at low speed and more gently at high
     // speed; releasing returns to centre faster than turning in. Analog sticks are already
@@ -293,9 +373,24 @@ export class CarPhysics {
     this.steerInput = moveTowards(this.steerInput, steerTarget, steerRate * dt);
     this.steerAngle = this.steerInput * this.maxSteerAngle(fwdSpeed);
 
+    // ---------- Arcade drift ----------
+    if (!this.drifting) {
+      if (enabled && inp.drift && fwdSpeed > 13 && Math.abs(steerTarget) > 0.3 && this.groundedWheels >= 3) {
+        this.drifting = true;
+        this.driftDir = Math.sign(steerTarget);
+        this.driftTime = 0;
+        this.driftCharge = 0;
+        this.driftLevel = 0;
+      }
+    } else if (!enabled || !inp.drift || fwdSpeed < 8 || this.airTime > 0.7) {
+      this.endDrift(enabled && !!inp.drift === false);
+    }
+
     let throttle = enabled ? clamp(inp.throttle, 0, 1) : 0;
-    let brake = enabled ? clamp(inp.brake, 0, 1) : 0;
-    const handbrake = enabled ? inp.handbrake : true;
+    if (boosting && enabled) throttle = Math.max(throttle, 0.6);
+    let brake = enabled ? clamp(inp.brake, 0, 1) : stunned ? 0.25 : 0;
+    // The drift button acts as a handbrake only at low speed (hairpin flicks, turning around).
+    const handbrake = this.enabled ? !stunned && !!inp.handbrake && !this.drifting && (fwdSpeed < 13 || !inp.drift) : true;
     let driveDir = 1;
     this.reversing = false;
     // Brake pedal reverses once the car is (almost) stopped.
@@ -348,10 +443,11 @@ export class CarPhysics {
       if (driveDir < 0) {
         engineForce = absV < maxRev ? -this.maxDriveForce * 0.5 * throttle : 0;
       } else {
-        const powerLimited = this.power / Math.max(absV, 1);
+        const od = this.overdriveTime > 0 ? 1.45 : 1;
+        const powerLimited = (this.power * od) / Math.max(absV, 1);
         // Mild torque curve for character.
         const curve = 0.88 + 0.12 * Math.sin(rpmNorm * Math.PI);
-        engineForce = Math.min(this.maxDriveForce, powerLimited) * throttle * curve;
+        engineForce = Math.min(this.maxDriveForce * (od > 1 ? 1.3 : 1), powerLimited) * throttle * curve;
         if (this.shiftTimer > 0) engineForce *= 0.35;
       }
     }
@@ -385,8 +481,8 @@ export class CarPhysics {
         grounded++;
         wh.grounded = true;
         wh.surface = this.physics.surfaceOf(hit.collider.handle);
-        const surf = SURFACES[wh.surface];
-        if (surf.dust) surfaceGrass++;
+        const surf = this.surfaceProps(wh.surface, boosting);
+        if (surf.dust && wh.surface !== 'dirt') surfaceGrass++;
         wh.suspension = Math.max(0.02, hit.timeOfImpact - wh.radius);
         wh.compression = rest - wh.suspension;
         // Surface roughness (curbs rumble, grass bumps)
@@ -449,7 +545,7 @@ export class CarPhysics {
         wh.spinAngle += wh.spinSpeed * dt;
         continue;
       }
-      const surf = SURFACES[wh.surface];
+      const surf = this.surfaceProps(wh.surface, boosting);
       // Wheel heading: body forward rotated by steer angle around body up.
       if (wh.front) {
         _wFwd.copy(_fwd).multiplyScalar(cosS).addScaledVector(_right, -sinS);
@@ -465,11 +561,14 @@ export class CarPhysics {
       const vLong = _pv.dot(_wFwd);
       const vLat = _pv.dot(_wSide);
 
-      const N = wh.load;
+      // Lateral grip uses a capped load: landings and curb strikes spike the suspension
+      // force, and full grip on that spike trips the car over (arcade: it just lands).
+      const N = Math.min(wh.load, this.mass * 9.81 * 0.4 + def.downforce * this.speed * this.speed * 0.3);
       let mu = def.grip * surf.grip;
       const rear = !wh.front;
       // Slightly more rear grip than front = stable, predictable (understeer-biased) balance.
       if (rear) mu *= handbrake ? 0.55 : 1.08;
+      if (this.overdriveTime > 0) mu *= 0.88;
 
       // Lateral: slip-angle based with saturation and a small drop after the peak.
       const slipAngle = Math.atan2(vLat, Math.max(Math.abs(vLong), 4));
@@ -480,6 +579,10 @@ export class CarPhysics {
       // path above still lets the rear break away for drifts.
       if (absC > 1) latCoef = Math.sign(latCoef) * Math.max(handbrake && rear ? 0.8 : 0.93, 1 - (absC - 1) * 0.05);
       let fLat = -latCoef * mu * N;
+      // Drifting / spinning: the arcade layer below steers the car; tyres only scrub.
+      if (this.drifting) fLat *= 0.18;
+      else if (this.driftRecover > 0) fLat *= lerp(1, 0.3, this.driftRecover / 0.45);
+      else if (stunned) fLat *= 0.2;
 
       // Longitudinal
       let fLong = 0;
@@ -533,7 +636,14 @@ export class CarPhysics {
     // ---------- Aero ----------
     const v2 = this.speed * this.speed;
     if (this.speed > 0.1) {
-      _f.copy(_v).normalize().multiplyScalar(-this.dragCoef * (1 - 0.35 * this.slipstream) * v2 * dt);
+      const dragScale = (1 - 0.35 * this.slipstream) * (boosting ? 0.6 : 1) * (this.overdriveTime > 0 ? 0.62 : 1);
+      _f.copy(_v).normalize().multiplyScalar(-this.dragCoef * dragScale * v2 * dt);
+      body.applyImpulse(_f, true);
+    }
+    if (boosting && grounded > 0 && !this.reversing) {
+      const cap = this.topSpeed * 1.38;
+      const k = clamp(1 - fwdSpeed / cap, 0, 1);
+      _f.copy(_fwd).multiplyScalar(this.mass * this.boostAccel * (0.35 + 0.65 * k) * dt);
       body.applyImpulse(_f, true);
     }
     if (grounded > 0) {
@@ -544,11 +654,24 @@ export class CarPhysics {
     // ---------- Stability / air control ----------
     if (grounded === 0) {
       this.airTime += dt;
-      // Gently level the car in the air so jumps land wheels-down.
+      // Level the car in the air so jumps land wheels-down (arcade): spring toward upright
+      // plus damping of pitch/roll rates (yaw is kept).
       _axis.crossVectors(_up, LOCAL_UP);
-      const k = this.mass * 1.8 * dt;
+      const k = this.mass * 5 * dt;
       body.applyTorqueImpulse({ x: _axis.x * k, y: 0, z: _axis.z * k }, true);
+      const yawR = _w.dot(_up);
+      _axis.copy(_w).addScaledVector(_up, -yawR);
+      body.applyTorqueImpulse(_axis.multiplyScalar(-this.mass * 3 * dt), true);
     } else {
+      if (this.airTime > 0.25) {
+        // Arcade landing: soak up the impact instead of bouncing off the springs.
+        this.landed = this.airTime;
+        this.sinceLanding = 0;
+        const lv = body.linvel();
+        if (lv.y < 0) body.setLinvel({ x: lv.x, y: lv.y * 0.15, z: lv.z }, true);
+        const yawR = _w.dot(_up);
+        body.setAngvel({ x: _up.x * yawR, y: _up.y * yawR, z: _up.z * yawR }, true);
+      }
       this.airTime = 0;
       // Stability control: yaw damping that ramps up with the body slip angle, so slides
       // are caught instead of turning into spins. Mostly off with the handbrake (drifting).
@@ -572,9 +695,73 @@ export class CarPhysics {
 
 
     }
+    // Signed body slip (nose vs direction of travel).
+    {
+      const planar = Math.hypot(_v.x, _v.z);
+      this.bodySlip = planar > 3 ? wrapPi(Math.atan2(_fwd.x, _fwd.z) - Math.atan2(_v.x, _v.z)) : 0;
+    }
+
+    if (this.drifting && grounded > 0) {
+      // Assisted drift: steering picks how tight the arc is; the car holds a slip angle
+      // into the turn and the path bends with a centripetal impulse (arcade, predictable).
+      this.driftTime += dt;
+      const dir = this.driftDir;
+      const tight = clamp((this.steerInput * dir + 1) / 2, 0, 1);
+      const speedNow = Math.max(8, Math.hypot(_v.x, _v.z));
+      const latAcc = lerp(8, 23, tight) * (this.def.arcade?.driftTurn ?? 1);
+      const turnRate = latAcc / speedNow; // rad/s, positive = turning right
+      // Rotate the planar velocity (turning right decreases yaw in three.js coordinates).
+      const ang = -dir * turnRate * dt;
+      const c = Math.cos(ang);
+      const sn = Math.sin(ang);
+      const nvx = _v.x * c + _v.z * sn;
+      const nvz = -_v.x * sn + _v.z * c;
+      const loss = 1 - 0.035 * dt; // drifting scrubs a little speed
+      body.applyImpulse({ x: (nvx * loss - _v.x) * this.mass, y: 0, z: (nvz * loss - _v.z) * this.mass }, true);
+      const targetSlip = -dir * lerp(0.26, 0.52, tight);
+      const yawTarget = -dir * turnRate + (targetSlip - this.bodySlip) * 4.5;
+      const w = body.angvel();
+      const yr = w.x * _up.x + w.y * _up.y + w.z * _up.z;
+      const d = yawTarget - yr;
+      body.setAngvel({ x: w.x + _up.x * d, y: w.y + _up.y * d, z: w.z + _up.z * d }, true);
+      // Charge: good angle on tarmac at speed charges fastest.
+      if (this.surface !== 'grass' && grounded >= 3) {
+        const a = Math.abs(this.bodySlip);
+        let rate = a > 0.17 && a < 0.75 ? 1 : 0.35;
+        if (speedNow < 18) rate *= 0.5;
+        rate *= this.def.arcade?.driftCharge ?? 1;
+        this.driftCharge += rate * dt;
+        const L = CarPhysics.DRIFT_LEVELS;
+        this.driftLevel = this.driftCharge >= L[2] ? 3 : this.driftCharge >= L[1] ? 2 : this.driftCharge >= L[0] ? 1 : 0;
+      }
+    }
+
+    if (!this.drifting && this.driftRecover > 0) {
+      // Drift exit: straighten the car along its direction of travel instead of letting
+      // the tyres bite at full slip angle (which snaps it into a spin).
+      this.driftRecover = Math.max(0, this.driftRecover - dt);
+      if (grounded > 0 && Math.abs(this.bodySlip) > 0.03) {
+        const w = body.angvel();
+        const yr = w.x * _up.x + w.y * _up.y + w.z * _up.z;
+        const target = -this.bodySlip * 5;
+        const d = (target - yr) * Math.min(1, dt * 12);
+        body.setAngvel({ x: w.x + _up.x * d, y: w.y + _up.y * d, z: w.z + _up.z * d }, true);
+      }
+    }
+
+    if (stunned) {
+      // Spin out: forced yaw rotation, scrub speed.
+      const w = body.angvel();
+      const yr = w.x * _up.x + w.y * _up.y + w.z * _up.z;
+      const target = this.stunSpin * Math.min(1, this.stunTime * 1.4);
+      const d = target - yr;
+      body.setAngvel({ x: w.x + _up.x * d, y: w.y + _up.y * d, z: w.z + _up.z * d }, true);
+      body.applyImpulse({ x: -_v.x * this.mass * 1.2 * dt, y: 0, z: -_v.z * this.mass * 1.2 * dt }, true);
+    }
+
     // Impacts must never fling the car into a spin: cap yaw rate (handbrake drifts exempt),
     // on the ground and in the air.
-    {
+    if (!this.drifting && !stunned) {
       const w = body.angvel();
       const yr = w.x * _up.x + w.y * _up.y + w.z * _up.z;
       const maxYaw = handbrake ? 4 : 2.6;
@@ -585,6 +772,22 @@ export class CarPhysics {
     }
     if (_up.y < 0.25) this.upsideDownTime += dt;
     else this.upsideDownTime = 0;
+  }
+
+  /** Surface properties; a boost blasts through the off-road penalty. */
+  private surfaceProps(type: SurfaceType, boosting: boolean) {
+    const s = SURFACES[type];
+    if (!s.dust) return s;
+    if (boosting) return { grip: Math.max(s.grip, 0.9), rollingResistance: 0.015, roughness: s.roughness * 0.5, dust: true };
+    const k = this.def.arcade?.offroad ?? 1;
+    if (k === 1) return s;
+    // Off-road specialists (rally) feel less of the penalty; track cars feel more.
+    return {
+      grip: clamp(lerp(0.95, s.grip, k), 0.3, 1),
+      rollingResistance: Math.max(0.01, lerp(0.015, s.rollingResistance, k)),
+      roughness: s.roughness * Math.min(1, k),
+      dust: true,
+    };
   }
 
   /** Distance from the body origin to the ground under each wheel (for visuals). */

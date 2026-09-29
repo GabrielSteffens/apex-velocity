@@ -12,6 +12,7 @@ export class PlayerController implements CarController {
     out.brake = this.input.brake;
     out.steer = this.input.steer;
     out.handbrake = this.input.handbrake;
+    out.drift = this.input.handbrake;
     out.analog = this.input.steerIsAnalog;
   }
 }

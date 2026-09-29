@@ -59,6 +59,26 @@ export const tracks: TrackDefinition[] = [
     roadWidth: 14,
     barrierOffset: 16,
     checkpointCount: 8,
+    gameplay: {
+      boostPads: [
+        { s: 372, lateral: 4.2 }, // T1 apex (inside, next to the curb)
+        { s: 905, lateral: 3.8 }, // back straight crest
+        { s: 1232, lateral: -3.5 }, // chicane exit
+        { s: 1905, lateral: -4.2 }, // hairpin exit, wide
+        { s: 2185, lateral: 4 }, // final sweepers apex
+      ],
+      itemRows: [170, 690, 1420, 2040],
+      shortcuts: [
+        {
+          name: 'Chicane Cut',
+          fromS: 1088,
+          toS: 1182,
+          width: 6.5,
+          ramp: { at: 0.44, height: 0.42, length: 7 },
+          gate: { at: 0.3, gap: 5 },
+        },
+      ],
+    },
     curbCurvature: 1 / 170,
     gridSpacing: 9,
     theme: 'sunset-hills',

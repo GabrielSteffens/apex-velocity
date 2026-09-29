@@ -275,6 +275,37 @@ export class ParticleManager {
     }
   }
 
+  /** Coloured spark spray (drift charge sparks, boost pads, item pickups). */
+  coloredSparks(p: THREE.Vector3, v: THREE.Vector3, r: number, g: number, b: number, count: number, speed: number, life = 0.35, size = 0.07): void {
+    for (let i = 0; i < count; i++) {
+      this.sparks.emit(
+        p.x,
+        p.y,
+        p.z,
+        v.x + (Math.random() - 0.5) * speed,
+        Math.random() * speed * 0.7 + 0.5,
+        v.z + (Math.random() - 0.5) * speed,
+        size * (0.7 + Math.random() * 0.6),
+        -0.05,
+        life * (0.6 + Math.random() * 0.8),
+        1,
+        r,
+        g,
+        b,
+      );
+    }
+  }
+
+  /** Item hit: fireball sparks + a burst of dark smoke. */
+  explosion(p: THREE.Vector3): void {
+    const zero = new THREE.Vector3();
+    this.coloredSparks(p, zero, 1, 0.55, 0.15, 45, 16, 0.6, 0.12);
+    this.coloredSparks(p, zero, 1, 0.9, 0.5, 20, 9, 0.4, 0.18);
+    for (let i = 0; i < 14; i++) {
+      this.smoke.emit(p.x + (Math.random() - 0.5) * 1.5, p.y + Math.random(), p.z + (Math.random() - 0.5) * 1.5, (Math.random() - 0.5) * 4, 1 + Math.random() * 2.5, (Math.random() - 0.5) * 4, 0.9 + Math.random() * 0.6, 2.6, 1.2 + Math.random(), 0.45, 0.2, 0.19, 0.2);
+    }
+  }
+
   update(dt: number, camera: THREE.Camera): void {
     this.time += dt;
     this.smoke.update(dt);

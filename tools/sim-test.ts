@@ -52,6 +52,15 @@ rm.events = {
   complete: () => { complete = true; },
   reset: (car) => { resets.set(car.name, (resets.get(car.name) ?? 0) + 1); console.log(`[${rm.raceTime.toFixed(1)}] reset ${car.name} s=${car.progress.proj.s.toFixed(0)}`); },
 };
+const itemLog = new Map<string, number>();
+const bump = (k: string) => itemLog.set(k, (itemLog.get(k) ?? 0) + 1);
+rm.items.events = {
+  use: (_c, it) => bump('use:' + it),
+  hit: (_t, _b, it) => bump('hit:' + it),
+  blocked: () => bump('blocked'),
+  pickup: () => bump('pickup'),
+};
+rm.features.events = { boostPad: () => bump('pad'), shortcut: (c) => { bump('shortcut'); console.log(`[${rm.raceTime.toFixed(1)}] SHORTCUT ${c.name}`); } };
 rm.startCountdown();
 const dt = physics.fixedDt;
 const wall0 = performance.now();
@@ -76,4 +85,5 @@ console.log(`\nsimulated ${(steps * dt).toFixed(1)}s in ${(wall / 1000).toFixed(
 console.log('complete:', complete, 'car-car contacts:', carHits, 'wall contacts:', wallHits, 'maxUpsideDown:', maxUpsideDown.toFixed(2), 'position changes:', posChanges.length);
 console.log('wall hits by car@s:', [...wallLog.entries()].sort((a,b)=>b[1]-a[1]).slice(0,15).map(([k,v])=>`${k}:${v}`).join(' '));
 console.log('resets:', Object.fromEntries(resets));
+console.log('items/features:', Object.fromEntries([...itemLog.entries()].sort()));
 console.log('final:', rm.standings.map(c => `${c.position}.${c.name} ${c.progress.finished ? c.progress.finishTime.toFixed(1) : 'DNF'} best=${c.progress.bestLapTime.toFixed(2)}`).join(' | '));

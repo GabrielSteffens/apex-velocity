@@ -14,6 +14,9 @@ import type { SkidMarks } from '../effects/SkidMarks';
 import type { ChaseCamera } from '../camera/ChaseCamera';
 import type { Car } from '../car/Car';
 import { CarGroundFx } from '../effects/CarGroundFx';
+import { StyleTracker, type StylePopup } from '../gameplay/Style';
+import { GameplayVisuals } from '../gameplay/GameplayVisuals';
+import { ITEM_INFO } from '../gameplay/Items';
 
 export interface SessionServices {
   scene: THREE.Scene;
@@ -32,6 +35,8 @@ export interface SessionUIHooks {
   toast(text: string, sub?: string): void;
   playerFinished(position: number): void;
   raceComplete(): void;
+  popup(p: StylePopup, combo: number): void;
+  banner(text: string, sub: string, color: string): void;
 }
 
 const _v = new THREE.Vector3();
@@ -62,6 +67,11 @@ export class RaceSession {
   private otherA = { rpm: 0, load: 0, distance: 0, pan: 0 };
   private otherB = { rpm: 0, load: 0, distance: 0, pan: 0 };
   private othersBuf: { rpm: number; load: number; distance: number; pan: number }[] = [];
+  readonly style: StyleTracker | null = null;
+  private gfx: GameplayVisuals;
+  private lastBoost = new Map<Car, number>();
+  private sparkAcc = 0;
+  private prevSinceLanding = 99;
 
   constructor(
     private readonly svc: SessionServices,
@@ -78,6 +88,26 @@ export class RaceSession {
       this.fx.set(car, { lastGear: 1, smokeAcc: 0, exhaustAcc: 0, lastImpact: 0 });
     });
     ts.scenery.setStartLights(0, false);
+    this.gfx = new GameplayVisuals(this.rm.items, svc.particles);
+    svc.scene.add(this.gfx.group);
+    if (this.rm.player) {
+      const style = new StyleTracker(this.rm.player, this.rm);
+      style.onPopup = (p) => {
+        ui.popup(p, style.combo);
+        svc.audio.popup(p.tier, style.combo);
+        if (p.tier === 'epic') svc.input.rumble(0.4, 0.6, 180);
+      };
+      style.onComboBanked = (mult, bonus) => {
+        ui.banner(`COMBO x${mult.toFixed(1).replace('.0', '')}`, `+${bonus.toLocaleString('en-US')}`, '#ffc53d');
+        svc.audio.comboBanked(mult);
+      };
+      style.onComboLost = () => {
+        ui.banner('COMBO BROKEN', '', '#ff3b2f');
+        svc.audio.comboLost();
+      };
+      this.style = style;
+    }
+    this.wireGameplay(ui);
     this.groundFx = new CarGroundFx(this.rm.cars);
     svc.scene.add(this.groundFx.group);
 
@@ -125,6 +155,87 @@ export class RaceSession {
         if (car.isPlayer) svc.camera.snap();
       },
     };
+  }
+
+  /** Items, boost pads and shortcuts -> sound, particles, camera, score, UI. */
+  private wireGameplay(ui: SessionUIHooks): void {
+    const { audio, particles, camera, input } = this.svc;
+    const near = (c: Car, r = 70) => c.isPlayer || camera.camera.position.distanceTo(c.physics.position) < r;
+    const style = () => this.style;
+    this.rm.items.events = {
+      pickup: (car, box) => {
+        if (near(car, 40)) particles.coloredSparks(box.pos, car.physics.velocity.clone().multiplyScalar(0.3), 1, 0.8, 0.3, 14, 6, 0.4, 0.1);
+        if (car.isPlayer) audio.itemPickup();
+      },
+      ready: (car) => {
+        if (car.isPlayer) audio.itemReady();
+      },
+      use: (car, item) => {
+        const pl = car.isPlayer;
+        const vol = pl ? 1 : Math.max(0, 1 - camera.camera.position.distanceTo(car.physics.position) / 60);
+        if (vol <= 0) return;
+        if (item === 'nitro') audio.boost(1.2 * vol);
+        else if (item === 'missile') audio.missile();
+        else if (item === 'shield') audio.shield();
+        else if (item === 'oil') audio.oil();
+        else if (item === 'overdrive') audio.overdrive();
+        else if (item === 'emp') audio.emp();
+        if (pl && (item === 'nitro' || item === 'overdrive')) {
+          camera.shake(0.12);
+          input.rumble(0.3, 0.8, 300);
+        }
+      },
+      hit: (target, by, item) => {
+        if (near(target)) particles.explosion(target.physics.position);
+        if (near(target, 90)) audio.explosion(target.isPlayer ? 1 : 0.5);
+        if (target.isPlayer) {
+          camera.shake(0.7);
+          input.rumble(1, 0.8, 450);
+          ui.banner('SPUN OUT!', `${ITEM_INFO[item].name}${by ? ' · ' + by.name : ''}`, '#ff3b2f');
+          style()?.crash();
+        } else if (by?.isPlayer) {
+          const st = style();
+          st?.stats && st.stats.hits++;
+          st?.add(item === 'missile' ? 'DIRECT HIT' : item === 'emp' ? 'EMP SHOCK' : 'OIL SPIN', item === 'missile' ? 400 : 300, 'great');
+        }
+      },
+      blocked: (target) => {
+        if (near(target)) audio.shieldBlock();
+        if (target.isPlayer) {
+          const st = style();
+          if (st) st.stats.blocks++;
+          st?.add('BLOCKED', 200, 'good');
+        }
+      },
+      explode: (pos) => {
+        if (camera.camera.position.distanceTo(pos) < 90) particles.explosion(pos);
+      },
+      emp: (car, radius) => this.gfx.ring(car.physics.position, radius),
+    };
+    this.rm.features.events = {
+      boostPad: (car, pad) => {
+        if (near(car, 50)) particles.coloredSparks(pad.pos, car.physics.velocity.clone().multiplyScalar(0.4), 0.4, 0.9, 1, 18, 5, 0.35, 0.09);
+        if (car.isPlayer) {
+          audio.boost(0.7);
+          input.rumble(0.2, 0.5, 200);
+          const st = style();
+          if (st) st.stats.pads++;
+          st?.add('BOOST', 50, 'small');
+        }
+      },
+      shortcut: (car) => {
+        if (!car.isPlayer) return;
+        const st = style();
+        if (st) st.stats.shortcuts++;
+        st?.add('SHORTCUT!', 750, 'epic');
+      },
+    };
+  }
+
+  /** Player pressed the item button. */
+  useItem(): void {
+    const p = this.rm.player;
+    if (p && this.rm.phase === 'racing') this.rm.items.use(p);
   }
 
   /** Scene-captured reflections on every car's glossy materials. */
@@ -176,6 +287,22 @@ export class RaceSession {
     _n.copy(car.physics.velocity).multiplyScalar(0.05);
     if (strength > 0.08) this.svc.particles.sparksAt(_p, _n, strength);
     const involvesPlayer = car.isPlayer || other?.isPlayer;
+    if (this.style && car.isPlayer) {
+      this.style.contact(other);
+      if (wall && strength > 0.45) this.style.crash();
+    } else if (this.style && other?.isPlayer) this.style.contact(car);
+    // Shield bash: a shielded car knocks rivals into a spin.
+    if (other && strength > 0.15) {
+      const items = this.rm.items;
+      for (const [a, b] of [[car, other], [other, car]] as const) {
+        if (items.get(a).shield > 0 && items.get(b).shield <= 0 && b.physics.stunTime <= 0) {
+          b.physics.stun(0.8);
+          if (a.isPlayer) this.style?.add('SHIELD BASH', 300, 'great');
+          if (b.isPlayer) this.svc.camera.shake(0.5);
+        }
+      }
+    }
+    if (car.physics.drifting && wall && strength > 0.3) car.physics.endDrift(false);
     const cam = this.svc.camera.camera.position;
     const dist = cam.distanceTo(_p);
     if (involvesPlayer) {
@@ -190,6 +317,11 @@ export class RaceSession {
   frameUpdate(dt: number, alpha: number): void {
     this.time += dt;
     const { particles, skids, audio } = this.svc;
+    if (dt > 0) {
+      this.style?.update(dt);
+      this.gfx.update(dt, this.rm.cars);
+      this.arcadeFx(dt);
+    }
     const racing = this.rm.phase !== 'grid';
     let playerSkid = 0;
     let playerRough = 0;
@@ -297,6 +429,53 @@ export class RaceSession {
     }
   }
 
+  /** Boost flames, drift charge sparks, landing thumps, drift-release kicks. */
+  private arcadeFx(dt: number): void {
+    const { particles, audio, camera, input } = this.svc;
+    this.sparkAcc += dt;
+    const emitSparks = this.sparkAcc > 1 / 40;
+    if (emitSparks) this.sparkAcc = 0;
+    for (const car of this.rm.cars) {
+      const ph = car.physics;
+      const near = car.isPlayer || camera.camera.position.distanceToSquared(ph.position) < 90 * 90;
+      // Boost start (drift release or pad/item) -> sound + kick
+      const prev = this.lastBoost.get(car) ?? 0;
+      if (ph.boostTime > prev + 0.25 && car.isPlayer) {
+        camera.shake(0.08);
+        if (prev <= 0) audio.boost(Math.min(1.3, ph.boostTime));
+        input.rumble(0.2, 0.6, 220);
+      }
+      this.lastBoost.set(car, ph.boostTime);
+      if (!near || !car.visual || !emitSparks) continue;
+      const vis = car.visual as CarVisual;
+      if (ph.boostTime > 0 || ph.overdriveTime > 0) {
+        _dir.copy(ph.forward).negate();
+        for (const e of vis.parts.exhausts) {
+          _v.copy(e).applyQuaternion(ph.quaternion).add(ph.position);
+          if (ph.boostTime > 0) particles.coloredSparks(_v, _p.copy(_dir).multiplyScalar(8).add(ph.velocity), 0.35, 0.75, 1, 3, 2, 0.18, 0.2);
+          else particles.flame(_v, _dir);
+        }
+      }
+      if (ph.drifting && ph.driftLevel > 0 && ph.groundedWheels > 0) {
+        const c = [[1, 1, 1], [0.3, 0.65, 1], [1, 0.55, 0.12], [0.8, 0.35, 1]][ph.driftLevel];
+        for (let i = 2; i < 4; i++) {
+          const w = ph.wheels[i];
+          if (w.grounded) particles.coloredSparks(w.contact, _p.copy(ph.velocity).multiplyScalar(0.3), c[0], c[1], c[2], 2 + ph.driftLevel, 4, 0.28, 0.06 + ph.driftLevel * 0.015);
+        }
+      }
+    }
+    const p = this.rm.player;
+    if (p) {
+      const since = p.physics.sinceLanding;
+      if (since < this.prevSinceLanding) {
+        camera.shake(0.25);
+        audio.landing(0.6);
+        input.rumble(0.6, 0.3, 160);
+      }
+      this.prevSinceLanding = since;
+    }
+  }
+
   private fillOther(c: Car | null, d: number, slot: { rpm: number; load: number; distance: number; pan: number }, camPos: THREE.Vector3, right: THREE.Vector3): void {
     if (!c) return;
     slot.rpm = c.physics.rpm;
@@ -308,6 +487,7 @@ export class RaceSession {
 
   dispose(): void {
     this.unsubscribe();
+    this.gfx.dispose();
     this.groundFx.dispose();
     this.rm.dispose();
     this.visuals = [];

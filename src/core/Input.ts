@@ -13,13 +13,16 @@ export interface TouchState {
  * Keyboard + gamepad + touch input. Exposes analog axes for driving and edge-triggered actions
  * for menus (pause, reset, camera).
  */
-export type Action = 'pause' | 'reset' | 'camera' | 'confirm' | 'up' | 'down' | 'back' | 'debug';
+export type Action = 'pause' | 'reset' | 'camera' | 'confirm' | 'up' | 'down' | 'back' | 'debug' | 'item' | 'left' | 'right';
 
 const ACTION_KEYS: Record<Action, string[]> = {
   debug: ['F3'],
   pause: ['Escape', 'KeyP'],
   reset: ['KeyR'],
   camera: ['KeyC'],
+  item: ['KeyE', 'ShiftLeft', 'ShiftRight', 'KeyQ'],
+  left: ['ArrowLeft', 'KeyA'],
+  right: ['ArrowRight', 'KeyD'],
   confirm: ['Enter'],
   up: ['ArrowUp'],
   down: ['ArrowDown'],
@@ -79,7 +82,11 @@ export class Input {
     const map: [number, Action][] = [
       [9, 'pause'], // Start
       [3, 'reset'], // Y
-      [5, 'camera'], // RB
+      [8, 'camera'], // Select / View
+      [5, 'item'], // RB
+      [1, 'item'], // B (also 'back' in menus)
+      [14, 'left'],
+      [15, 'right'],
       [0, 'confirm'], // A
       [12, 'up'],
       [13, 'down'],
@@ -154,6 +161,20 @@ export class Input {
     if (this.key('Space') || this.touch.handbrake) return true;
     const p = this.pad();
     return !!p && (!!p.buttons[2]?.pressed || !!p.buttons[4]?.pressed);
+  }
+
+  /** Controller rumble (gamepad) or a short buzz (phones). */
+  rumble(strong: number, weak: number, ms: number): void {
+    const p = this.padCache as (Gamepad & { vibrationActuator?: { playEffect?: (t: string, o: object) => Promise<unknown> } }) | null;
+    if (p?.vibrationActuator?.playEffect) {
+      p.vibrationActuator.playEffect('dual-rumble', { duration: ms, strongMagnitude: Math.min(1, strong), weakMagnitude: Math.min(1, weak) }).catch(() => {});
+    } else if (this.lastDevice === 'touch' && navigator.vibrate) {
+      try {
+        navigator.vibrate(Math.round(ms * Math.min(1, strong + weak)));
+      } catch {
+        /* not allowed */
+      }
+    }
   }
 
   /** Any key or button currently held (used for "press any key" prompts). */

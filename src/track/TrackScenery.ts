@@ -55,7 +55,7 @@ export class TrackScenery {
     this.vegetation = new Vegetation(
       track,
       terrain,
-      (x, z) => this.inComplex(x, z) || this.inLake(x, z) || this.venue.blocked(x, z),
+      (x, z) => this.inComplex(x, z) || this.inLake(x, z) || this.venue.blocked(x, z) || layout.nearShortcut(x, z, 5),
       track.def.scenery.seed,
       track.def.scenery.treeCount,
     );
@@ -121,7 +121,7 @@ export class TrackScenery {
       const x = tr.originX + 40 + rnd.next() * (tr.size - 80);
       const z = tr.originZ + 40 + rnd.next() * (tr.size - 80);
       const d = tr.distanceAt(x, z);
-      if (d < bo + 5) continue;
+      if (d < bo + 5 || this.layout.nearShortcut(x, z, 4)) continue;
       if (this.inComplex(x, z) || this.inLake(x, z)) continue;
       // Boulders gather on slopes and rocky high ground.
       const y0 = tr.heightAt(x, z);
@@ -330,7 +330,7 @@ export class TrackScenery {
       if (side === 1 && Math.abs(t.deltaS(0, s)) < 230) continue;
       const lat = side * (bo + 2.6);
       const p = t.offsetPoint(s, lat, new THREE.Vector3());
-      if (t.distanceToCenterline(p.x, p.z) < bo + 1) continue; // inside of a tight corner
+      if (t.distanceToCenterline(p.x, p.z) < bo + 1 || this.layout.nearShortcut(p.x, p.z, 4)) continue; // inside of a tight corner
       const f = this.frameAt(s, lat);
       const g = new THREE.Group();
       g.position.copy(f.pos);
@@ -506,7 +506,7 @@ export class TrackScenery {
       const side = k % 2 === 0 ? 1 : -1;
       const lat = side * (bo + 4.5);
       const pos = t.offsetPoint(s, lat, new THREE.Vector3());
-      if (t.distanceToCenterline(pos.x, pos.z) < bo + 3) continue;
+      if (t.distanceToCenterline(pos.x, pos.z) < bo + 3 || this.layout.nearShortcut(pos.x, pos.z, 4)) continue;
       const f = this.frameAt(s, lat);
       const g = new THREE.Group();
       g.position.copy(f.pos);

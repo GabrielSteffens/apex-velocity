@@ -2,6 +2,8 @@ import { h, formatTime } from './dom';
 import type { RaceManager } from '../game/RaceManager';
 import type { Car } from '../car/Car';
 import type { TrackGeometry } from '../track/TrackGeometry';
+import { ArcadeHUD } from './ArcadeHUD';
+import type { StyleTracker } from '../gameplay/Style';
 
 function hex(c: number): string {
   return '#' + c.toString(16).padStart(6, '0');
@@ -289,12 +291,16 @@ export class RaceHUD {
     else el.textContent = value;
   }
   private mapBox: HTMLElement;
+  readonly arcade: ArcadeHUD;
+  /** Style tracker of the current session (set by the game). */
+  style: StyleTracker | null = null;
 
-  constructor(track: TrackGeometry) {
+  constructor(track: TrackGeometry, isTouch = false) {
+    this.arcade = new ArcadeHUD(isTouch);
     this.minimap = new Minimap(track);
     this.hints = h('div', {
       class: 'hints',
-      html: '<span class="key">W</span> throttle &nbsp;<span class="key">S</span> brake / reverse &nbsp;<span class="key">A</span><span class="key">D</span> steer<br><span class="key">Space</span> handbrake &nbsp;<span class="key">R</span> reset car &nbsp;<span class="key">C</span> camera &nbsp;<span class="key">Esc</span> pause',
+      html: '<span class="key">W</span> throttle &nbsp;<span class="key">S</span> brake &nbsp;<span class="key">A</span><span class="key">D</span> steer &nbsp;<span class="key">Space</span> + steer: drift → release = turbo<br><span class="key">E</span> use item &nbsp;<span class="key">R</span> reset car &nbsp;<span class="key">C</span> camera &nbsp;<span class="key">Esc</span> pause',
     });
     this.speedoBox = h('div', { class: 'speedo' }, this.speedo.canvas);
     this.mapBox = h('div', { class: 'minimap' }, this.minimap.canvas);
@@ -317,6 +323,7 @@ export class RaceHUD {
       this.mapBox,
       this.speedoBox,
       this.wrongWay,
+      this.arcade.el,
       this.hints,
       this.fpsEl,
     );
@@ -338,6 +345,7 @@ export class RaceHUD {
   }
 
   resetRows(): void {
+    this.arcade.reset();
     this.rows.clear();
     this.textCache.clear();
     this.standingsEl.replaceChildren();
@@ -359,6 +367,7 @@ export class RaceHUD {
     if (this.wrongWay.classList.contains('on') !== ww) this.wrongWay.classList.toggle('on', ww);
 
     const ph = p.physics;
+    this.arcade.update(dt, p, rm.items, this.style);
     this.speedo.draw(Math.abs(ph.forwardSpeed) * 3.6, ph.rpm, ph.def.redlineRPM, ph.gear, dt);
     // The minimap doesn't need 60+ Hz.
     this.mapTimer -= dt;

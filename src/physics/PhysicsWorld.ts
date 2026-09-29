@@ -12,7 +12,7 @@ export const GROUP = {
 /** Packs Rapier interaction groups: membership in the high 16 bits, filter in the low 16. */
 export const groups = (membership: number, filter: number): number => ((membership & 0xffff) << 16) | (filter & 0xffff);
 
-export type SurfaceType = 'asphalt' | 'curb' | 'grass' | 'gravel';
+export type SurfaceType = 'asphalt' | 'curb' | 'grass' | 'gravel' | 'dirt';
 
 export interface SurfaceProps {
   grip: number;
@@ -27,6 +27,8 @@ export const SURFACES: Record<SurfaceType, SurfaceProps> = {
   curb: { grip: 0.95, rollingResistance: 0.02, roughness: 0.6, dust: false },
   grass: { grip: 0.62, rollingResistance: 0.09, roughness: 0.25, dust: true },
   gravel: { grip: 0.5, rollingResistance: 0.2, roughness: 0.4, dust: true },
+  // Packed dirt (shortcuts): loose but drivable, drifts still charge.
+  dirt: { grip: 0.8, rollingResistance: 0.05, roughness: 0.45, dust: true },
 };
 
 let rapierReady: Promise<Rapier> | null = null;

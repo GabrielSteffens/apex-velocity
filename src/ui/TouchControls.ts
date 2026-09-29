@@ -1,7 +1,7 @@
 import { h } from './dom';
 import type { Input } from '../core/Input';
 
-type Control = 'left' | 'right' | 'gas' | 'brake' | 'hand' | 'pause' | 'camera' | 'reset';
+type Control = 'left' | 'right' | 'gas' | 'brake' | 'hand' | 'pause' | 'camera' | 'reset' | 'item';
 
 const ARROW_L = '<svg viewBox="0 0 24 24"><path d="M15 4 7 12l8 8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ARROW_R = '<svg viewBox="0 0 24 24"><path d="M9 4l8 8-8 8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -37,10 +37,11 @@ export class TouchControls {
       h(
         'div',
         { class: 'tc-pedals' },
-        btn('hand', 'tc-hand', '<span>HB</span>', 'Handbrake'),
+        btn('hand', 'tc-hand', '<span>DRIFT</span>', 'Drift'),
         btn('brake', 'tc-brake', '<span>BRAKE</span>', 'Brake / reverse'),
         btn('gas', 'tc-gas', '<span>GAS</span>', 'Accelerate'),
       ),
+      btn('item', 'tc-item', '<span class="tc-item-icon"></span>', 'Use item'),
       h('div', { class: 'tc-top' }, btn('reset', 'tc-small', RESET, 'Reset car'), btn('camera', 'tc-small', CAMERA, 'Camera'), btn('pause', 'tc-small', PAUSE, 'Pause')),
     );
 
@@ -54,6 +55,7 @@ export class TouchControls {
       if (ctl === 'pause') this.input.trigger('pause');
       else if (ctl === 'camera') this.input.trigger('camera');
       else if (ctl === 'reset') this.input.trigger('reset');
+      else if (ctl === 'item') this.input.trigger('item');
       this.update();
     };
     const onMove = (e: PointerEvent) => {
@@ -95,6 +97,17 @@ export class TouchControls {
     t.left = !this.tiltEnabled && held.has('left');
     t.right = !this.tiltEnabled && held.has('right');
     for (const [ctl, b] of this.buttons) b.classList.toggle('on', held.has(ctl));
+  }
+
+  /** Shows the held item on the ITEM button (null = empty). */
+  setItem(iconHtml: string | null, color: string): void {
+    const b = this.buttons.get('item')!;
+    const key = iconHtml ? iconHtml + color : '';
+    if (b.dataset.key === key) return;
+    b.dataset.key = key;
+    b.classList.toggle('has-item', !!iconHtml);
+    b.style.setProperty('--item', color);
+    (b.firstElementChild as HTMLElement).innerHTML = iconHtml ?? '';
   }
 
   /** Release everything (e.g. when pausing or leaving the race). */

@@ -291,4 +291,97 @@ export class AudioManager {
   backfire(): void {
     this.burst(0.08, 0.25, 700);
   }
+
+  // ---------- Arcade feedback ----------
+
+  /** Boost ignition: rising turbine whoosh (stronger for bigger boosts). */
+  boost(strength = 1): void {
+    this.burst(0.5 + strength * 0.3, 0.22 + strength * 0.15, 3200, 'highpass');
+    this.tone(180, 0.6, 'sawtooth', 0.05 * strength + 0.03, 0, 520);
+    this.tone(360, 0.5, 'triangle', 0.05, 0.02, 1100);
+  }
+
+  /** Drift charge reached a new level: bright ping, higher for each level. */
+  driftLevel(level: number): void {
+    const f = [0, 880, 1175, 1568][level] ?? 1568;
+    this.tone(f, 0.18, 'square', 0.05);
+    this.tone(f * 1.5, 0.22, 'sine', 0.06, 0.04);
+  }
+
+  itemPickup(): void {
+    [660, 880, 1320].forEach((f, i) => this.tone(f, 0.12, 'triangle', 0.08, i * 0.05));
+  }
+
+  rouletteTick(): void {
+    this.tone(1200 + Math.random() * 300, 0.03, 'square', 0.025);
+  }
+
+  itemReady(): void {
+    this.tone(1046, 0.12, 'triangle', 0.1);
+    this.tone(1568, 0.25, 'triangle', 0.1, 0.07);
+  }
+
+  missile(): void {
+    this.burst(0.7, 0.3, 2400, 'bandpass');
+    this.tone(300, 0.6, 'sawtooth', 0.05, 0, 900);
+  }
+
+  explosion(strength = 1): void {
+    this.burst(0.9, 0.55 * strength + 0.1, 900);
+    this.tone(55, 0.7, 'sine', 0.45 * strength + 0.1, 0, 30);
+    this.burst(0.3, 0.2 * strength, 4000, 'highpass');
+  }
+
+  shield(): void {
+    [523, 659, 784].forEach((f) => this.tone(f, 0.5, 'sine', 0.06));
+    this.tone(1568, 0.3, 'triangle', 0.04, 0.05, 2093);
+  }
+
+  shieldBlock(): void {
+    this.tone(1318, 0.25, 'triangle', 0.12, 0, 660);
+    this.burst(0.2, 0.15, 5000, 'highpass');
+  }
+
+  emp(): void {
+    this.tone(1800, 0.5, 'sawtooth', 0.07, 0, 90);
+    this.tone(90, 0.4, 'square', 0.05, 0.05, 60);
+    this.burst(0.4, 0.2, 6000, 'bandpass');
+  }
+
+  oil(): void {
+    this.burst(0.25, 0.25, 400);
+    this.tone(160, 0.2, 'sine', 0.1, 0, 90);
+  }
+
+  overdrive(): void {
+    this.tone(110, 0.9, 'sawtooth', 0.07, 0, 330);
+    this.tone(220, 0.9, 'square', 0.04, 0.05, 660);
+  }
+
+  /** Style popup; pitch climbs with the combo. */
+  popup(tier: 'small' | 'good' | 'great' | 'epic', combo: number): void {
+    const base = 660 * Math.pow(2, Math.min(12, combo) / 12);
+    const vol = tier === 'epic' ? 0.12 : tier === 'great' ? 0.1 : 0.07;
+    this.tone(base, 0.12, 'triangle', vol);
+    if (tier === 'great' || tier === 'epic') this.tone(base * 1.5, 0.2, 'triangle', vol * 0.8, 0.06);
+    if (tier === 'epic') this.tone(base * 2, 0.3, 'sine', vol * 0.7, 0.12);
+  }
+
+  comboBanked(mult: number): void {
+    const n = Math.min(6, Math.round(mult * 1.5));
+    for (let i = 0; i < n; i++) this.tone(523 * Math.pow(2, i / 5), 0.15, 'triangle', 0.08, i * 0.05);
+  }
+
+  comboLost(): void {
+    this.tone(440, 0.3, 'sawtooth', 0.06, 0, 110);
+  }
+
+  nearMiss(): void {
+    this.burst(0.35, 0.22, 1600, 'bandpass');
+  }
+
+  landing(strength: number): void {
+    this.burst(0.2, 0.2 + strength * 0.25, 500);
+    this.tone(70, 0.25, 'sine', 0.2 + strength * 0.2, 0, 45);
+  }
 }

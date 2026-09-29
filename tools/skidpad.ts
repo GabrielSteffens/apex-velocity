@@ -76,3 +76,23 @@ if (mode === 'stability') {
     console.log(`${name.padEnd(34)} maxBodySlip ${maxSlip.toFixed(1).padStart(5)}°  ${spun ? 'SPUN' : 'ok  '}  avgLat ${(latSum / n / 9.81).toFixed(2)}g  endSpeed ${car.speed.toFixed(1)}`);
   }
 }
+if (mode === 'arcade') {
+  // Arcade drift: hold drift + steer at speed, then release -> mini-turbo.
+  for (const steerIn of [1, 0, -1]) {
+    const { physics, car } = makeWorld();
+    const dt = physics.fixedDt;
+    let released = '';
+    for (let k = 0; k < 120 * 11; k++) {
+      const t = k / 120;
+      car.input.throttle = 1;
+      const drifting = t > 5 && t < 9;
+      car.input.drift = drifting;
+      car.input.handbrake = drifting;
+      car.input.steer = t > 5 && t < 5.3 ? 1 : drifting ? steerIn : 0;
+      car.step(dt); physics.step();
+      if (car.driftReleased) { released = `released L${car.driftReleased.level} after ${car.driftReleased.time.toFixed(2)}s boost=${car.boostTime.toFixed(2)}`; car.driftReleased = null; }
+      if (k % 60 === 0 && t > 4.5) console.log(`steer ${steerIn} t=${t.toFixed(1)} v=${(car.speed*3.6).toFixed(0)} yaw=${car.body.angvel().y.toFixed(2)} slip=${(car.bodySlip*57.3).toFixed(0)} drift=${car.drifting} charge=${car.driftCharge.toFixed(2)} L${car.driftLevel} up.y=${car.up.y.toFixed(3)}`);
+    }
+    console.log(released);
+  }
+}

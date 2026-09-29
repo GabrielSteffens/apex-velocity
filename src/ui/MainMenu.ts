@@ -4,10 +4,12 @@ import { versionLabel } from '../version';
 import type { AudioManager } from '../audio/AudioManager';
 import type { Input } from '../core/Input';
 import type { CarDefinition, TrackDefinition } from '../data/types';
+import { statRows } from './Garage';
 
 export interface MainMenuActions {
   start(): void;
   settings(): void;
+  garage(): void;
   comingSoon(feature: string): void;
 }
 
@@ -15,6 +17,8 @@ export interface MainMenuActions {
 export class MainMenu {
   readonly el: HTMLElement;
   private nav: NavList;
+  private carCard = h('div', { class: 'card' });
+  private profileEl = h('div', { class: 'profile-badge' });
 
   constructor(audio: AudioManager, actions: MainMenuActions, car: CarDefinition, track: TrackDefinition, trackLength: number) {
     const click = (fn: () => void) => () => {
@@ -26,12 +30,11 @@ export class MainMenu {
       h('button', { class: `menu-btn interactive ${extra}`, onclick: click(fn) }, h('span', {}, label), tag ? h('span', { class: 'tag' }, tag) : null);
     const buttons = [
       btn('Start Race', actions.start, 'primary', 'QUICK RACE'),
-      btn('Garage', () => actions.comingSoon('Garage'), '', 'SOON'),
+      btn('Garage', actions.garage, '', 'CARS'),
       btn('Track Select', () => actions.comingSoon('Track Select'), '', 'SOON'),
       btn('Tournament', () => actions.comingSoon('Tournament'), '', 'SOON'),
       btn('Settings', actions.settings),
     ];
-    const statRow = (label: string, v: number) => h('div', { class: 'stat' }, label, h('div', { class: 'bar' }, h('i', { style: `width:${v * 10}%` })));
     this.el = h(
       'div',
       { class: 'screen menu' },
@@ -44,17 +47,7 @@ export class MainMenu {
       h(
         'div',
         { class: 'cards' },
-        h(
-          'div',
-          { class: 'card' },
-          h('div', { class: 'kicker' }, 'Your Car'),
-          h('div', { class: 'title' }, car.name),
-          h('div', { class: 'sub' }, `${car.manufacturer} · ${car.powerKW} kW · ${car.topSpeed} km/h`),
-          statRow('SPEED', car.stats.speed),
-          statRow('ACCEL', car.stats.acceleration),
-          statRow('HANDLING', car.stats.handling),
-          statRow('BRAKING', car.stats.braking),
-        ),
+        this.carCard,
         h(
           'div',
           { class: 'card' },
@@ -64,13 +57,35 @@ export class MainMenu {
           h('div', { class: 'sub', style: 'margin-top:10px;max-width:320px;line-height:1.35' }, track.description),
         ),
       ),
+      this.profileEl,
       h('div', { class: 'version', title: 'Versão · commit · data do build' }, versionLabel()),
       h(
         'div',
-        { class: 'footer', html: '<span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> drive &nbsp; <span class="key">Space</span> handbrake &nbsp; <span class="key">R</span> reset &nbsp; <span class="key">C</span> camera &nbsp; <span class="key">Esc</span> pause &nbsp; · &nbsp; Gamepad supported' },
+        { class: 'footer', html: '<span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> drive &nbsp; <span class="key">Space</span> drift &nbsp; <span class="key">E</span> item &nbsp; <span class="key">R</span> reset &nbsp; <span class="key">C</span> camera &nbsp; <span class="key">Esc</span> pause &nbsp; · &nbsp; Gamepad supported' },
       ),
     );
     this.nav = new NavList(buttons, audio);
+    this.setCar(car);
+  }
+
+  setCar(car: CarDefinition): void {
+    this.carCard.replaceChildren(
+      h('div', { class: 'kicker' }, `Your Car · ${car.role}`),
+      h('div', { class: 'title' }, car.name),
+      h('div', { class: 'sub' }, `${car.manufacturer} · ${car.powerKW} kW · ${car.topSpeed} km/h`),
+      ...statRows(car),
+    );
+  }
+
+  /** Driver level + XP bar + a teaser of the next unlock. */
+  setProfile(level: number, frac: number, best: number, next: string): void {
+    const parts: HTMLElement[] = [
+      h('div', { class: 'lvl' }, h('small', {}, 'DRIVER LEVEL'), String(level)),
+      h('div', { class: 'xp' }, h('i', { style: `width:${Math.round(frac * 100)}%` })),
+      h('div', { class: 'meta' }, best > 0 ? `BEST SCORE ${best.toLocaleString('en-US')}` : 'NO RACES YET — GO!'),
+    ];
+    if (next) parts.push(h('div', { class: 'meta next' }, next));
+    this.profileEl.replaceChildren(...parts);
   }
 
   handleInput(input: Input): void {

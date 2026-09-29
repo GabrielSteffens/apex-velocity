@@ -8,6 +8,8 @@ import { RacingLine } from '../ai/RacingLine';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 import type { TrackGeometry } from '../track/TrackGeometry';
 import type { TrackLayout } from '../track/TrackLayout';
+import { ItemSystem } from '../gameplay/Items';
+import { TrackFeatures } from '../gameplay/TrackFeatures';
 
 export type RacePhase = 'grid' | 'countdown' | 'racing' | 'finished';
 
@@ -56,6 +58,8 @@ export class RaceManager {
   private lastCountdownValue = -1;
   private bestLapOverall = Infinity;
   readonly aiContext: AIContext;
+  readonly items: ItemSystem;
+  readonly features: TrackFeatures;
 
   constructor(
     readonly physics: PhysicsWorld,
@@ -71,11 +75,15 @@ export class RaceManager {
       brakeDecel: car0.braking * 0.72,
       topSpeed: car0.topSpeed / 3.6,
     });
+    this.items = new ItemSystem(track, this.cars, 17);
+    this.features = new TrackFeatures(track, layout, this.cars);
     this.aiContext = {
       cars: this.cars,
       line: this.line,
       isRacing: () => this.phase === 'racing' || this.phase === 'finished',
       raceTime: () => this.raceTime,
+      items: this.items,
+      layout,
     };
 
     const slots = layout.gridSlots(race.participants.length);
@@ -94,6 +102,8 @@ export class RaceManager {
       this.cars.push(car);
     });
     this.standings = [...this.cars];
+    // Item slots are per car; register the cars created above.
+    for (const c of this.cars) this.items.state.set(c, { slot: null, roulette: 0, pending: null, shield: 0, targetedBy: null });
     this.updateStandings();
   }
 
@@ -186,6 +196,10 @@ export class RaceManager {
       }
     }
     this.updateStandings();
+    if (racing) {
+      this.features.step(dt);
+      this.items.step(dt, true);
+    }
 
     if (this.phase === 'finished' && this.completeTimer > 0) {
       const allDone = this.cars.every((c) => c.progress.finished);

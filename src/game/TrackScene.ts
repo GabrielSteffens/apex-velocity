@@ -9,6 +9,7 @@ import { RacingLine } from '../ai/RacingLine';
 import { createTrackColliders, type TrackColliderSet } from '../physics/TrackColliders';
 import type { PhysicsWorld } from '../physics/PhysicsWorld';
 import { getCar } from '../data/cars';
+import { FeatureMeshes } from '../track/FeatureMeshes';
 
 // setTimeout (not rAF) so loading also progresses in a background tab.
 const nextFrame = () => new Promise<void>((r) => setTimeout(r, 16));
@@ -25,6 +26,7 @@ export class TrackScene {
   line!: RacingLine;
   colliders!: TrackColliderSet;
   scenery!: TrackScenery;
+  features!: FeatureMeshes;
 
   private constructor(readonly def: TrackDefinition) {}
 
@@ -51,6 +53,8 @@ export class TrackScene {
     ts.colliders = createTrackColliders(physics, ts.track, ts.terrain, ts.layout);
     const builder = new TrackBuilder(ts.track, ts.terrain, ts.layout, ts.line);
     ts.group.add(builder.group);
+    ts.features = new FeatureMeshes(ts.track, ts.layout);
+    ts.group.add(ts.features.group);
     step(0.65, 'Planting trees');
     await nextFrame();
     ts.scenery = new TrackScenery(ts.track, ts.terrain, ts.layout, ts.line);

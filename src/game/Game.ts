@@ -26,6 +26,11 @@ import { Countdown, Toast, LoadingScreen } from '../ui/Overlay';
 import { clamp } from '../core/math';
 import { detailProfile, isTouchDevice } from '../core/device';
 import { TouchControls } from '../ui/TouchControls';
+import { ITEM_ICONS } from '../ui/ArcadeHUD';
+import { ITEM_INFO } from '../gameplay/Items';
+import { Profile, rollChallenges, raceXp, levelForXp, xpForLevel, type Challenge, type RaceSummary } from './Profile';
+import { Garage } from '../ui/Garage';
+import { cars } from '../data/cars';
 
 const MAX_STEPS_PER_FRAME = 12;
 
@@ -53,7 +58,13 @@ export class Game {
   private lastTime = 0;
   private elapsed = 0;
   private trackId = 'sunset-circuit';
-  private carId = 'falcon-r';
+  readonly profile = new Profile();
+  private carId = this.profile.data.selectedCar;
+  private garage!: Garage;
+  private challenges: Challenge[] = [];
+  private challengeDone: boolean[] = [];
+  private raceSeed = Math.floor(Math.random() * 1e6);
+  private challengeTimer = 0;
   /** Debug: simulation speed multiplier (set from the console: game.timeScale = 4). */
   timeScale = 1;
 
@@ -155,6 +166,7 @@ export class Game {
       {
         start: () => this.startRace(),
         settings: () => this.openSettings('menu'),
+        garage: () => this.openGarage(),
         comingSoon: (f) => this.toast.show('Coming Soon', f),
       },
       getCar(this.carId),
@@ -169,13 +181,127 @@ export class Game {
       settings: () => this.openSettings('pause'),
       quit: () => this.quitToMenu(),
     });
-    this.hud = new RaceHUD(this.trackScene.track);
+    this.hud = new RaceHUD(this.trackScene.track, this.isTouch);
+    this.hud.arcade.onTick = () => this.audio.rouletteTick();
+    this.hud.arcade.onDriftLevel = (l) => {
+      this.audio.driftLevel(l);
+      this.input.rumble(0.1, 0.4 + l * 0.15, 90);
+    };
     this.results = new ResultsScreen(this.audio, {
       restart: () => this.restartRace(),
       menu: () => this.quitToMenu(),
+      garage: () => {
+        this.quitToMenu();
+        this.openGarage();
+      },
     });
-    this.uiRoot.append(this.hud.el, this.countdown.el, this.menu.el, this.pause.el, this.results.el, this.settingsPanel.el, this.toast.el);
+    this.garage = new Garage(
+      this.audio,
+      this.profile,
+      (car) => {
+        this.carId = car.id;
+        this.menu.setCar(car);
+        this.newSession();
+      },
+      () => this.menu.el.classList.add('visible'),
+    );
+    this.refreshProfileUI();
+    this.uiRoot.append(this.hud.el, this.countdown.el, this.menu.el, this.pause.el, this.results.el, this.garage.el, this.settingsPanel.el, this.toast.el);
     this.hud.resize();
+  }
+
+  private openGarage(): void {
+    this.menu.el.classList.remove('visible');
+    this.garage.open();
+  }
+
+  private refreshProfileUI(): void {
+    const xp = this.profile.data.xp;
+    const lvl = levelForXp(xp);
+    const a = xpForLevel(lvl);
+    const b = xpForLevel(lvl + 1);
+    const next = cars.filter((c) => c.unlockLevel > lvl).sort((x, y) => x.unlockLevel - y.unlockLevel)[0];
+    this.menu.setProfile(lvl, (xp - a) / (b - a), this.profile.data.bestScore[this.trackId] ?? 0, next ? `NEXT UNLOCK: ${next.name.toUpperCase()} AT LEVEL ${next.unlockLevel}` : '');
+  }
+
+  private raceSummary(): RaceSummary | null {
+    const p = this.session?.player;
+    const st = this.session?.style;
+    if (!p || !st) return null;
+    return { position: p.progress.finishPosition || p.position, finished: p.progress.finished, score: st.score, laps: this.settings.values.laps, stats: st.stats };
+  }
+
+  /** Player crossed the line: bank the combo, award XP, update records, fill the results. */
+  private finishProgress(): void {
+    const style = this.session?.style;
+    if (!style) return;
+    style.update(0); // count the final lap (clean lap) before banking
+    style.finish();
+    const r = this.raceSummary()!;
+    const prof = this.profile;
+    const before = prof.data.xp;
+    const levelBefore = levelForXp(before);
+    const xp = raceXp(r, this.challenges);
+    prof.data.xp += xp.total;
+    prof.data.races++;
+    if (r.position === 1) prof.data.wins++;
+    if (r.position <= 3) prof.data.podiums++;
+    const best = prof.data.bestScore[this.trackId] ?? 0;
+    const newBest = r.score > best;
+    if (newBest) prof.data.bestScore[this.trackId] = r.score;
+    const lap = this.session!.player!.progress.bestLapTime;
+    if (isFinite(lap) && lap < (prof.data.bestLap[this.trackId] ?? Infinity)) prof.data.bestLap[this.trackId] = lap;
+    prof.data.bestCombo = Math.max(prof.data.bestCombo, r.stats.bestCombo);
+    prof.data.shortcuts += r.stats.shortcuts;
+    prof.data.perfectDrifts += r.stats.perfectDrifts;
+    const levelAfter = levelForXp(prof.data.xp);
+    const unlocks = prof.takeNewUnlocks();
+    prof.save();
+    const frac = (x: number, l: number) => (x - xpForLevel(l)) / (xpForLevel(l + 1) - xpForLevel(l));
+    this.results.showProgress({
+      score: r.score,
+      newBest,
+      bestCombo: r.stats.bestCombo,
+      chips: [
+        ['DRIFTS', r.stats.drifts],
+        ['PERFECT', r.stats.perfectDrifts],
+        ['NEAR MISSES', r.stats.nearMisses],
+        ['OVERTAKES', r.stats.overtakes],
+        ['SHORTCUTS', r.stats.shortcuts],
+        ['ITEM HITS', r.stats.hits],
+        ['MAX COMBO', r.stats.bestCombo],
+      ],
+      challenges: this.challenges.map((c) => ({ text: c.text, done: c.progress(r) >= 1, xp: c.xp })),
+      xp,
+      levelBefore,
+      levelAfter,
+      fracBefore: frac(before, levelAfter),
+      fracAfter: frac(prof.data.xp, levelAfter),
+      unlocks,
+    });
+    this.refreshProfileUI();
+    this.raceSeed++;
+  }
+
+  /** Live challenge progress (a banner when one completes mid-race). */
+  private updateChallenges(dt: number): void {
+    this.challengeTimer -= dt;
+    if (this.challengeTimer > 0) return;
+    this.challengeTimer = 0.4;
+    const r = this.raceSummary();
+    if (!r) return;
+    const prog = this.challenges.map((c) => c.progress(r));
+    prog.forEach((p, i) => {
+      if (p >= 1 && !this.challengeDone[i]) {
+        this.challengeDone[i] = true;
+        // "Finish" challenges complete at the line; the results screen shows them.
+        if (!r.finished) {
+          this.hud.arcade.showBanner('CHALLENGE COMPLETE', `${this.challenges[i].text} · +${this.challenges[i].xp} XP`, '#7dffb0');
+          this.audio.comboBanked(3);
+        }
+      }
+    });
+    this.hud.arcade.setChallengeProgress(prog);
   }
 
   private createEnvironment(): Environment {
@@ -253,14 +379,22 @@ export class Game {
           setTimeout(() => this.hud.hideHints(), 6000);
         },
         toast: (t, sub) => this.toast.show(t, sub),
+        popup: (p, combo) => this.hud.arcade.popup(p, combo),
+        banner: (text, sub, color) => this.hud.arcade.showBanner(text, sub, color),
         playerFinished: (pos) => {
           this.toast.show(pos === 1 ? 'Victory!' : 'Finish', `P${pos}`);
+          this.finishProgress();
           this.state.set('FINISHED');
         },
         raceComplete: () => this.results.update(this.session!.rm),
       },
     );
     this.session.setNight(this.env.isNight);
+    this.hud.style = this.session.style;
+    this.challenges = rollChallenges(this.raceSeed, s.laps);
+    this.challengeDone = this.challenges.map(() => false);
+    this.hud.arcade.setChallenges(this.challenges.map((c) => ({ text: c.text, xp: c.xp })));
+    this.results.clearProgress();
     if (this.state.state !== 'LOADING') this.warmUpGpu();
     this.hud.resetRows();
     this.accumulator = 0;
@@ -412,9 +546,16 @@ export class Game {
     this.trackScene.scenery.updateCulling(this.camera.position, fog.far);
     windUniform.value = this.elapsed;
     this.trackScene.scenery.update(this.elapsed);
+    this.trackScene.features.update(this.elapsed);
     this.env.setTime(this.elapsed);
 
     if (!this.state.is('MENU', 'LOADING')) this.hud.update(session.rm, dt);
+    if (this.state.is('RACING')) this.updateChallenges(dt);
+    if (this.touch && player) {
+      const st = session.rm.items.get(player);
+      const it = st.roulette > 0 ? null : st.slot;
+      this.touch.setItem(it ? ITEM_ICONS[it] : null, it ? ITEM_INFO[it].color : '#888');
+    }
     if (this.state.is('FINISHED')) {
       if (!this.resultsShown && player && this.elapsed > 0) {
         // Give the finish moment a beat before covering the screen with results.
@@ -426,7 +567,8 @@ export class Game {
       this.results.update(session.rm);
     }
 
-    const speedFx = player && this.chase.mode !== 'hood' && !this.state.is('MENU') ? clamp((player.physics.speed - 28) / 45, 0, 1) * 0.8 : 0;
+    const boostFx = player && player.physics.boostTime > 0 ? Math.min(1, player.physics.boostTime * 1.5) * 0.5 : 0;
+    const speedFx = player && this.chase.mode !== 'hood' && !this.state.is('MENU') ? Math.min(1.2, clamp((player.physics.speed - 28) / 45, 0, 1) * 0.8 + boostFx) : 0;
     this.renderer.render(speedFx, this.elapsed);
     this.hud.renderStats = this.renderer.stats;
     this.hud.debug.frameMs = frameMs;
@@ -437,11 +579,13 @@ export class Game {
     const st = this.state;
     if (this.input.consume('debug')) this.settings.set('showFps', !this.settings.values.showFps);
     if (st.is('MENU')) {
-      if (!this.settingsPanel.el.classList.contains('visible')) this.menu.handleInput(this.input);
+      if (this.garage.visible) this.garage.handleInput(this.input);
+      else if (!this.settingsPanel.el.classList.contains('visible')) this.menu.handleInput(this.input);
       else if (this.input.consume('pause') || this.input.consume('back')) this.closeSettings();
     } else if (st.is('COUNTDOWN', 'RACING')) {
       if (this.input.consume('pause')) st.set('PAUSED');
       if (this.input.consume('reset') && st.is('RACING')) this.session?.rm.resetPlayer();
+      if (this.input.consume('item') && st.is('RACING')) this.session?.useItem();
       if (this.input.consume('camera')) this.chase.cycleMode();
     } else if (st.is('PAUSED')) {
       if (this.settingsPanel.el.classList.contains('visible')) {

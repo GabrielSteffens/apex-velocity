@@ -53,8 +53,23 @@ export interface CarDefinition {
     rimColor: number;
     spoiler: 'wing' | 'ducktail' | 'none';
   };
-  /** Stat bars for the future garage screen (0..10). */
-  stats: { speed: number; acceleration: number; handling: number; braking: number };
+  /** Stat bars for the garage screen (0..10). */
+  stats: { speed: number; acceleration: number; handling: number; braking: number; drift: number; offroad: number };
+  /** Arcade personality multipliers (default 1). */
+  arcade?: {
+    /** How tight drifts can turn. */
+    driftTurn?: number;
+    /** How fast drift charge builds. */
+    driftCharge?: number;
+    /** Boost thrust (pads, drift turbos, nitro). */
+    boostPower?: number;
+    /** Share of the off-road penalty felt (0 = none, 1 = full). */
+    offroad?: number;
+  };
+  /** Player level needed to unlock (1 = from the start). */
+  unlockLevel: number;
+  /** Short playstyle tag for the garage. */
+  role: string;
 }
 
 export interface TrackControlPoint {
@@ -131,6 +146,28 @@ export interface TrackDefinition {
   };
   /** Nominal lap length for UI, computed at runtime anyway. */
   difficulty: 1 | 2 | 3 | 4 | 5;
+  /** Arcade gameplay features: boost pads, item boxes, shortcuts. */
+  gameplay?: TrackGameplay;
+}
+
+/** A cut across the infield: leaves the road at `fromS`, rejoins at `toS`. */
+export interface ShortcutDef {
+  name: string;
+  fromS: number;
+  toS: number;
+  /** Path width in meters. */
+  width: number;
+  /** Kicker ramp at fraction `at` of the path. */
+  ramp?: { at: number; height: number; length: number };
+  /** Tyre-stack gate at fraction `at`, leaving a `gap` wide opening. */
+  gate?: { at: number; gap: number };
+}
+
+export interface TrackGameplay {
+  boostPads: { s: number; lateral: number }[];
+  /** Arc lengths of item box rows. */
+  itemRows: number[];
+  shortcuts: ShortcutDef[];
 }
 
 export interface AIProfile {
@@ -149,6 +186,10 @@ export interface AIProfile {
   /** Preferred lateral bias on the racing line (-1 inside .. 1 outside). */
   lineBias: number;
   color: number;
+  /** 0..1 — appetite for shortcuts and risky item plays. */
+  risk?: number;
+  /** Personality label shown in the UI. */
+  style?: 'aggressive' | 'defensive' | 'risky' | 'fast' | 'chaotic';
 }
 
 export interface RaceParticipantConfig {

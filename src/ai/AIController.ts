@@ -4,6 +4,8 @@ import type { CarController } from '../car/CarController';
 import type { CarInput } from '../car/CarPhysics';
 import type { Car } from '../car/Car';
 import type { RacingLine } from './RacingLine';
+import type { ItemSystem } from '../gameplay/Items';
+import type { TrackLayout, ShortcutPath } from '../track/TrackLayout';
 import { clamp, lerp, moveTowards, Random } from '../core/math';
 
 export interface AIContext {
@@ -13,6 +15,8 @@ export interface AIContext {
   isRacing(): boolean;
   /** Seconds since the green light. */
   raceTime(): number;
+  items?: ItemSystem;
+  layout?: TrackLayout;
 }
 
 type Mistake = { kind: 'late-brake' | 'wide' | 'wobble'; time: number; dir: number };
@@ -47,6 +51,12 @@ export class AIController implements CarController {
   wantsReset = false;
   /** Scales pace (used for post-race cool-down laps and gentle rubber-banding). */
   paceScale = 1;
+  private itemDelay = 1;
+  /** Shortcut currently being taken, and the lap it was decided for. */
+  private shortcut: ShortcutPath | null = null;
+  private shortcutDecided = new Map<ShortcutPath, number>();
+  private slowCorner = false;
+  private readonly risk: number;
 
   constructor(
     readonly car: Car,
@@ -55,6 +65,7 @@ export class AIController implements CarController {
     seed: number,
   ) {
     this.rng = new Random(seed);
+    this.risk = profile.risk ?? profile.aggression * 0.5;
   }
 
   onReset(): void {
@@ -63,6 +74,7 @@ export class AIController implements CarController {
     this.avoidOffset = 0;
     this.mistake = null;
     this.wantsReset = false;
+    this.shortcut = null;
   }
 
   update(dt: number, input: CarInput): void {
@@ -180,12 +192,33 @@ export class AIController implements CarController {
     desiredAvoid += sideAvoid;
     this.avoidOffset = moveTowards(this.avoidOffset, desiredAvoid, dt * (desiredAvoid === 0 ? 1.5 : 3.2));
 
+    this.thinkItems(dt, s, speed);
+    this.thinkShortcut(s);
+
     // ---------- Steering (pure pursuit) ----------
     const look = clamp(7 + speed * 0.5, 8, 36);
     const ts = s + look;
     let lat = line.offsetAt(ts) + this.avoidOffset + mistakeOffset + p.lineBias * 0.8;
     lat = clamp(lat, -halfW, halfW);
     track.offsetPoint(ts, lat, _target);
+    let shortcutSpeed = Infinity;
+    const sc = this.shortcut;
+    if (sc && this.ctx.layout) {
+      const a = sc.points[0];
+      const f = ((ph.position.x - a.x) * sc.dir.x + (ph.position.z - a.z) * sc.dir.z) / sc.length;
+      if (f > 0.97 || f < -1) this.shortcut = null;
+      else {
+        // Shorter look-ahead on the narrow path so the car threads the gate.
+        const la = clamp(6 + speed * 0.28, 8, 20) / sc.length;
+        this.ctx.layout.shortcutPoint(sc, clamp(f + la, 0, 1), _target);
+        if (f + la > 1) track.offsetPoint(sc.def.toS + (f + la - 1) * sc.length, line.offsetAt(sc.def.toS + 10), _target);
+        // Brake in time for the corner at the exit.
+        const toEnd = Math.max(0, (1 - f) * sc.length);
+        const vExit = line.speedAt(sc.def.toS + 6) * 1.05;
+        const cap = f < -0.15 ? Infinity : f < 0.35 ? 42 : 36;
+        shortcutSpeed = Math.min(cap, Math.sqrt(vExit * vExit + 2 * 9 * Math.max(0, toEnd - 30)));
+      }
+    }
     _inv.copy(ph.quaternion).invert();
     _local.copy(_target).sub(ph.position).applyQuaternion(_inv);
     // Car-local: +Z forward, +X left.
@@ -203,8 +236,16 @@ export class AIController implements CarController {
     const leadS = s + speed * 0.3;
     let targetSpeed = Math.min(line.speedAt(leadS), line.speedAt(leadS + 8)) * skill;
     targetSpeed = Math.min(targetSpeed, followSpeed);
+    if (this.shortcut) targetSpeed = shortcutSpeed;
     // Off the tarmac: be careful.
-    if (prog.proj.distance > track.halfWidth + 1) targetSpeed = Math.min(targetSpeed, 22);
+    if (prog.proj.distance > track.halfWidth + 1 && !this.shortcut) targetSpeed = Math.min(targetSpeed, 22);
+    // Corner exits: good drivers get a drift-style mini-turbo (they "earn" it like the player).
+    const lineHere = line.speedAt(s);
+    if (lineHere < 30) this.slowCorner = true;
+    else if (this.slowCorner && line.speedAt(s + 30) > 42) {
+      this.slowCorner = false;
+      if (Math.abs(ph.bodySlip) < 0.15 && !this.shortcut && this.rng.next() < 0.25 + 0.45 * p.skill * this.paceScale) ph.boost(0.8, 11);
+    }
     // Big heading error (spun, rejoining): slow down.
     if (Math.abs(alpha) > 0.9) targetSpeed = Math.min(targetSpeed, 9);
 
@@ -246,9 +287,83 @@ export class AIController implements CarController {
       throttle = 0;
     }
 
+    // Just landed a jump: straighten up before getting back on the power.
+    if (ph.sinceLanding < 0.6) {
+      throttle = Math.min(throttle, 0.3);
+      steer *= 0.5;
+    }
     input.throttle = throttle;
     input.brake = brake;
     input.steer = steer;
     input.handbrake = false;
+  }
+
+  /** Decide whether to cut through an upcoming shortcut this lap (risky drivers do). */
+  private thinkShortcut(s: number): void {
+    const layout = this.ctx.layout;
+    if (!layout || this.shortcut) return;
+    const track = this.car.track;
+    for (const sc of layout.shortcuts) {
+      const ds = track.deltaS(s, sc.def.fromS);
+      if (ds < 0 || ds > 60) continue;
+      const lap = this.car.progress.lapsCompleted;
+      if (this.shortcutDecided.get(sc) === lap) continue;
+      this.shortcutDecided.set(sc, lap);
+      const st = this.ctx.items?.get(this.car);
+      const hasBoost = st?.slot === 'nitro';
+      const chance = this.risk * 0.75 + (hasBoost ? 0.35 : 0);
+      if (this.rng.next() < chance) {
+        this.shortcut = sc;
+        if (hasBoost) this.itemDelay = Math.min(this.itemDelay, 0.4);
+      }
+    }
+  }
+
+  /** Item usage: each item has its situation. */
+  private thinkItems(dt: number, s: number, speed: number): void {
+    const items = this.ctx.items;
+    if (!items) return;
+    const car = this.car;
+    const st = items.get(car);
+    if (!st.slot) {
+      this.itemDelay = lerp(2.6, 0.6, this.profile.aggression) * (0.6 + this.rng.next() * 0.8);
+      return;
+    }
+    this.itemDelay -= dt;
+    if (this.itemDelay > 0 || car.physics.stunTime > 0) return;
+    const line = this.ctx.line;
+    let minAhead = Infinity;
+    for (let k = 20; k <= 160; k += 20) minAhead = Math.min(minAhead, line.speedAt(s + k));
+    const track = car.track;
+    const near = (range: number, behind: boolean) =>
+      this.ctx.cars.some((o) => {
+        if (o === car) return false;
+        const ds = track.deltaS(s, o.progress.proj.s);
+        return behind ? ds < -3 && ds > -range : Math.abs(ds) < range && o.physics.position.distanceTo(car.physics.position) < range;
+      });
+    let use = false;
+    switch (st.slot) {
+      case 'nitro':
+        use = (!!this.shortcut && speed > 15) || (minAhead > 48 && speed < 58) || this.rng.next() < dt * 0.08;
+        break;
+      case 'overdrive':
+        use = minAhead > 55;
+        break;
+      case 'missile': {
+        const ahead = items.carAhead(car);
+        use = !!ahead && ahead.progress.raceDistance - car.progress.raceDistance < 140;
+        break;
+      }
+      case 'shield':
+        use = !!st.targetedBy || this.rng.next() < dt / 7;
+        break;
+      case 'oil':
+        use = near(30, true) || this.rng.next() < dt / 18;
+        break;
+      case 'emp':
+        use = near(15, false);
+        break;
+    }
+    if (use) items.use(car);
   }
 }

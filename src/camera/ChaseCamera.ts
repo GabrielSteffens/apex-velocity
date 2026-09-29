@@ -41,6 +41,7 @@ export class ChaseCamera {
   private surge = 0;
   private roll = 0;
   private blendIn = 1;
+  private boostKick = 0;
   shakeEnabled = true;
   private ray: import('@dimforge/rapier3d-compat').Ray | null = null;
 
@@ -79,6 +80,8 @@ export class ChaseCamera {
     const speed = vel.length();
     const fwdSpeed = vel.dot(fwd);
     const speedT = clamp(speed / 70, 0, 1);
+    // Boost: FOV punch and the camera drops back a touch (sells the acceleration).
+    this.boostKick = damp(this.boostKick, ph.boostTime > 0 ? 1 : ph.overdriveTime > 0 ? 0.6 : 0, ph.boostTime > 0 ? 6 : 2.5, dt);
 
     const carYaw = Math.atan2(fwd.x, fwd.z);
     // Blend toward the velocity direction when moving so the camera looks where the car goes.
@@ -122,10 +125,10 @@ export class ChaseCamera {
       _look.copy(fwd).multiplyScalar(20).add(_desired);
       _look.y -= 0.6;
       this.lookTarget.copy(_look);
-      this.fov = damp(this.fov, 70 + speedT * 12, 4, dt);
+      this.fov = damp(this.fov, 70 + speedT * 12 + this.boostKick * 8, 4, dt);
     } else {
       const far = this.mode === 'far';
-      const targetDist = (far ? 8.8 : 5.9) + speedT * (far ? 2.0 : 1.6);
+      const targetDist = (far ? 8.8 : 5.9) + speedT * (far ? 2.0 : 1.6) + this.boostKick * 0.9;
       this.distance = damp(this.distance, targetDist, 2.5, dt);
       // Accelerating pulls the camera back a touch, braking lets it close in.
       const surge = clamp(this.accel * 0.03, -0.55, 0.45);
@@ -158,7 +161,7 @@ export class ChaseCamera {
       _look.copy(carPos).addScaledVector(_dir, 2.2 + speedT * 3);
       _look.y += 0.85 - this.surge * 0.15;
       this.lookTarget.lerp(_look, 1 - Math.exp(-25 * settle * dt));
-      this.fov = damp(this.fov, 60 + speedT * 16 + clamp(this.accel * 0.08, -1.5, 2), 3, dt);
+      this.fov = damp(this.fov, 60 + speedT * 16 + clamp(this.accel * 0.08, -1.5, 2) + this.boostKick * 9, 3, dt);
     }
 
     this.camera.position.copy(this.pos);
