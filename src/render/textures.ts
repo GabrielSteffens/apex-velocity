@@ -475,3 +475,87 @@ export function buildingFacade(): THREE.Texture {
   cache.set(key, t);
   return t;
 }
+
+/**
+ * Per-car livery atlas (1024x512, transparent background):
+ *  - top half: door panel art (racing number roundel, sponsor, speed stripe)
+ *  - bottom half: twin racing stripes (sampled across the hood / engine cover)
+ */
+export function liveryAtlas(num: number, accent: string): THREE.Texture {
+  const key = `livery${num}${accent}`;
+  if (cache.has(key)) return cache.get(key)!;
+  const [c, ctx] = canvas(1024, 512);
+  ctx.clearRect(0, 0, 1024, 512);
+  // --- Door panel (y 0..256). Text is drawn left-to-right as seen from outside.
+  // Speed stripe sweeping along the lower door, below the roundel
+  ctx.fillStyle = accent;
+  ctx.beginPath();
+  ctx.moveTo(0, 222);
+  ctx.lineTo(1024, 176);
+  ctx.lineTo(1024, 198);
+  ctx.lineTo(0, 248);
+  ctx.closePath();
+  ctx.fill();
+  // Number roundel
+  ctx.fillStyle = '#f7f7f5';
+  ctx.beginPath();
+  ctx.arc(170, 100, 80, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = 9;
+  ctx.strokeStyle = accent;
+  ctx.stroke();
+  ctx.fillStyle = '#111';
+  ctx.font = 'italic 900 108px "Saira Condensed", "Arial Black", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(num), 170, 106);
+  // Sponsor
+  ctx.textAlign = 'left';
+  ctx.font = 'italic 900 64px "Saira Condensed", "Arial Black", sans-serif';
+  ctx.fillStyle = accent;
+  ctx.fillText('APEX', 300, 92);
+  ctx.fillStyle = '#f2f2f2';
+  ctx.fillText('VELOCITY', 440, 92);
+  ctx.font = '700 26px "Rajdhani", Arial, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillText('NOVA TYRES  ·  APEX OIL  ·  KESTREL', 304, 140);
+  // --- Twin stripes (y 256..512): two bands across U
+  ctx.fillStyle = accent;
+  ctx.fillRect(330, 256, 150, 256);
+  ctx.fillRect(544, 256, 150, 256);
+  const t = finish(c, true, false);
+  t.anisotropy = 8;
+  cache.set(key, t);
+  return t;
+}
+
+/** Honeycomb mesh grille (tileable), for intakes and the rear grille. */
+export function honeycomb(): THREE.Texture {
+  const key = 'honeycomb';
+  if (cache.has(key)) return cache.get(key)!;
+  const [c, ctx] = canvas(128, 128);
+  ctx.fillStyle = '#16181b';
+  ctx.fillRect(0, 0, 128, 128);
+  ctx.fillStyle = '#020203';
+  const r = 10;
+  const w = Math.sqrt(3) * r;
+  for (let row = -1; row < 10; row++) {
+    for (let col = -1; col < 10; col++) {
+      const x = col * w + (row % 2 ? w / 2 : 0);
+      const y = row * r * 1.5;
+      ctx.beginPath();
+      for (let k = 0; k < 6; k++) {
+        const a = Math.PI / 6 + (k * Math.PI) / 3;
+        const px = x + Math.cos(a) * (r - 2);
+        const py = y + Math.sin(a) * (r - 2);
+        if (k === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  const t = finish(c, true);
+  cache.set(key, t);
+  return t;
+}

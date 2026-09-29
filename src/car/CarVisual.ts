@@ -62,7 +62,7 @@ export class CarVisual {
   setNight(on: boolean, realLight: boolean): void {
     const p = this.parts;
     p.headLightMat.emissiveIntensity = on ? 7 : 2.2;
-    this.tailBase = on ? 5 : 1.2;
+    this.tailBase = on ? 3 : 1.2;
     if (on && realLight && !this.spot) {
       const spot = new THREE.SpotLight(0xfff2de, 90, 90, 0.42, 0.55, 1.3);
       spot.position.set(0, 0.1, this.car.def.dimensions.length / 2);
@@ -131,7 +131,8 @@ export class CarVisual {
     const braking = ph.braking || (ph.input.handbrake && ph.enabled && ph.speed > 1);
     // Frame-rate independent fade (~70 ms rise).
     this.brakeGlow += ((braking ? 1 : 0) - this.brakeGlow) * (1 - Math.exp(-dt * 14));
-    this.parts.brakeLightMat.emissiveIntensity = this.tailBase + this.brakeGlow * 7;
+    // Kept moderate: very bright pure red tone-maps towards orange.
+    this.parts.brakeLightMat.emissiveIntensity = this.tailBase + this.brakeGlow * 4.5;
     this.parts.reverseLightMat.emissiveIntensity = ph.reversing ? 3 : 0;
   }
 
