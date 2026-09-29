@@ -9,27 +9,55 @@ const MERGEABLE = ['position', 'normal', 'uv', 'color', 'mr'];
  * expressed in `root`'s local space. Cuts draw calls dramatically for procedurally built
  * props (cars, buildings, signs). Meshes listed in `keep` are left untouched.
  */
-export function mergeByMaterial(root: THREE.Object3D, keep: Set<THREE.Object3D> = new Set()): void {
+export function mergeByMaterial(root: THREE.Object3D, keep: Set<THREE.Object3D> = new Set(), chunkSize = 0): void {
   root.updateMatrixWorld(true);
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
-  const groups = new Map<THREE.Material, { geos: THREE.BufferGeometry[]; cast: boolean; receive: boolean; order: number }>();
+  const groups = new Map<string, { mat: THREE.Material; geos: THREE.BufferGeometry[]; cast: boolean; receive: boolean; order: number }>();
+  const center = new THREE.Vector3();
   const remove: THREE.Mesh[] = [];
-  root.traverse((o) => {
-    if (!(o instanceof THREE.Mesh) || o instanceof THREE.InstancedMesh || keep.has(o) || Array.isArray(o.material)) return;
-    const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+  const addPart = (o: THREE.Mesh, src: THREE.BufferGeometry, material: THREE.Material) => {
+    const g = src.index ? src.toNonIndexed() : src.clone();
     g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld));
     if (!g.attributes.normal) g.computeVertexNormals();
     g.morphAttributes = {};
-    let entry = groups.get(o.material);
-    if (!entry) groups.set(o.material, (entry = { geos: [], cast: false, receive: false, order: 0 }));
+    g.clearGroups();
+    // Optionally keep merged meshes spatially compact so frustum culling (main camera and
+    // shadow camera) can still skip far-away parts of the map.
+    let key = material.uuid;
+    if (chunkSize > 0) {
+      g.computeBoundingSphere();
+      center.copy(g.boundingSphere!.center);
+      key += `:${Math.floor(center.x / chunkSize)}:${Math.floor(center.z / chunkSize)}`;
+    }
+    let entry = groups.get(key);
+    if (!entry) groups.set(key, (entry = { mat: material, geos: [], cast: false, receive: false, order: 0 }));
     entry.geos.push(g);
     entry.cast ||= o.castShadow;
     entry.receive ||= o.receiveShadow;
     entry.order = Math.max(entry.order, o.renderOrder);
+  };
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh) || o instanceof THREE.InstancedMesh || keep.has(o)) return;
+    if (Array.isArray(o.material)) {
+      // Multi-material mesh (e.g. a box with different faces): split it per geometry group.
+      const geo = o.geometry;
+      if (!geo.index || !geo.groups.length) return;
+      for (const grp of geo.groups) {
+        const mat = o.material[grp.materialIndex ?? 0];
+        if (!mat) continue;
+        const sub = geo.clone();
+        sub.setIndex(Array.from(geo.index.array.slice(grp.start, grp.start + grp.count)));
+        addPart(o, sub, mat);
+        sub.dispose();
+      }
+    } else {
+      addPart(o, o.geometry, o.material);
+    }
     remove.push(o);
   });
   for (const o of remove) o.removeFromParent();
-  for (const [mat, e] of groups) {
+  for (const e of groups.values()) {
+    const mat = e.mat;
     // Keep only attributes shared by every geometry in the group (uv is synthesised).
     const common = MERGEABLE.filter((name) => name === 'uv' || e.geos.every((g) => g.attributes[name]));
     for (const g of e.geos) {

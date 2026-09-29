@@ -4,6 +4,7 @@ import type { TrackGeometry } from '../track/TrackGeometry';
 import type { Terrain } from '../track/Terrain';
 import type { TrackLayout } from '../track/TrackLayout';
 import { buildRibbon, curbProfile, roadProfile } from '../track/TrackMeshData';
+import { buildRunoffRibbon } from '../track/RunoffMesh';
 
 export interface TrackColliderSet {
   road: RAPIER.Collider;
@@ -101,6 +102,16 @@ export function createTrackColliders(physics: PhysicsWorld, track: TrackGeometry
     );
     physics.setSurface(c, 'curb');
     curbs.push(c);
+  }
+
+  // Gravel traps (low grip, dust) and asphalt run-off areas.
+  for (const zone of layout.runoffs) {
+    const data = buildRunoffRibbon(track, terrain, zone);
+    const c = world.createCollider(
+      R.ColliderDesc.trimesh(data.positions, data.indices, R.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(0.8).setCollisionGroups(groundGroups),
+      fixed,
+    );
+    physics.setSurface(c, zone.kind === 'gravel' ? 'gravel' : 'asphalt');
   }
 
   const corridor = terrain.buildCorridorMesh(track.def.barrierOffset + 40);

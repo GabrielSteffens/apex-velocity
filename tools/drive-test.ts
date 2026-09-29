@@ -131,3 +131,28 @@ for (const [lat, ang, v] of [[13.5, -0.35, 8], [14, -0.2, 14], [13, -0.5, 5]] as
   });
   console.log(fmt(`grind ${v} m/s ${Math.round(-ang * 57.3)}° (min up.y ${minUpY.toFixed(2)}, max lat ${maxLat.toFixed(1)})`, m));
 }
+
+// 7. Gravel trap: surface detection and deceleration
+{
+  const g = layout.runoffs.find((z) => z.kind === 'gravel');
+  if (g) {
+    const mid = ((g.startIndex + ((g.endIndex - g.startIndex + track.count) % track.count) / 2) % track.count) * track.spacing;
+    const lat = g.side * (g.inner + g.outer) / 2;
+    place(mid, lat, 0, 28);
+    const v0 = car.speed;
+    let onGravel = 0;
+    let vIn = 0;
+    let vOut = 0;
+    const m = run(1.5, () => {
+      car.input.throttle = 0;
+      const g2 = car.wheels.filter((w) => w.grounded && w.surface === 'gravel').length;
+      if (g2 >= 2) {
+        if (onGravel === 0) vIn = car.speed;
+        onGravel += 1 / 120;
+        vOut = car.speed;
+      }
+    });
+    const surf = `${onGravel.toFixed(2)}s on gravel, ${(vIn * 3.6).toFixed(0)}->${(vOut * 3.6).toFixed(0)} km/h`;
+    console.log(fmt(`gravel trap from ${(v0 * 3.6).toFixed(0)} km/h (${surf})`, m));
+  }
+}

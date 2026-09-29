@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { TrackGeometry } from './TrackGeometry';
 import type { Terrain } from './Terrain';
 import type { TrackLayout } from './TrackLayout';
@@ -8,17 +7,10 @@ import { Noise2D, Random } from '../core/math';
 import * as tex from '../render/textures';
 import { mergeByMaterial } from '../render/merge';
 import { buildRibbon } from './TrackMeshData';
+import { Vegetation } from './Vegetation';
+import { Trackside } from './Trackside';
 
-type TreeKind = 'pine' | 'broad' | 'cypress';
-
-interface TreeParts {
-  trunk: THREE.BufferGeometry;
-  foliage: THREE.BufferGeometry;
-  colors: number[];
-}
-
-/** Shared uniform for foliage wind sway. */
-export const windUniform = { value: 0 };
+export { windUniform } from './Vegetation';
 
 function displace(g: THREE.BufferGeometry, noise: Noise2D, amount: number, freq: number): THREE.BufferGeometry {
   const p = g.attributes.position as THREE.BufferAttribute;
@@ -34,54 +26,6 @@ function displace(g: THREE.BufferGeometry, noise: Noise2D, amount: number, freq:
   return g;
 }
 
-function makeTreeParts(kind: TreeKind, noise: Noise2D): TreeParts {
-  if (kind === 'pine') {
-    const trunk = new THREE.CylinderGeometry(0.12, 0.22, 3, 6).translate(0, 1.5, 0);
-    const cones = [
-      new THREE.ConeGeometry(2.4, 4.2, 8).translate(0, 3.6, 0),
-      new THREE.ConeGeometry(1.9, 3.6, 8).translate(0, 5.6, 0),
-      new THREE.ConeGeometry(1.3, 3.0, 8).translate(0, 7.4, 0),
-    ].map((c) => displace(c.toNonIndexed(), noise, 0.12, 0.8));
-    return { trunk, foliage: mergeGeometries(cones)!, colors: [0x2d4a26, 0x35522a, 0x273f22, 0x3d5a2c] };
-  }
-  if (kind === 'cypress') {
-    const trunk = new THREE.CylinderGeometry(0.1, 0.16, 1.2, 5).translate(0, 0.6, 0);
-    const body = displace(new THREE.IcosahedronGeometry(1, 1).scale(0.9, 3.6, 0.9).translate(0, 4.1, 0).toNonIndexed(), noise, 0.1, 1.2);
-    return { trunk, foliage: body, colors: [0x2f4424, 0x34502a, 0x28391f] };
-  }
-  const trunk = new THREE.CylinderGeometry(0.16, 0.28, 3.2, 6).translate(0, 1.6, 0);
-  const blobs = [
-    new THREE.IcosahedronGeometry(2.1, 1).translate(0, 4.4, 0),
-    new THREE.IcosahedronGeometry(1.6, 0).translate(1.3, 3.9, 0.5),
-    new THREE.IcosahedronGeometry(1.5, 0).translate(-1.1, 4.0, -0.7),
-    new THREE.IcosahedronGeometry(1.3, 0).translate(0.2, 5.6, -0.3),
-  ].map((b) => displace(b.toNonIndexed(), noise, 0.18, 0.9));
-  return { trunk, foliage: mergeGeometries(blobs)!, colors: [0x5f7030, 0x77792f, 0x8e7d34, 0x4f6428, 0xa0782c] };
-}
-
-function swayMaterial(mat: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uWind = windUniform;
-    shader.vertexShader = 'uniform float uWind;\nattribute float trunk;\n' + shader.vertexShader.replace(
-      '#include <color_vertex>',
-      `#include <color_vertex>
-      #ifdef USE_INSTANCING_COLOR
-        vColor.xyz = mix(vColor.xyz, vec3(0.24, 0.17, 0.11), trunk);
-      #endif`,
-    ).replace(
-      '#include <begin_vertex>',
-      `#include <begin_vertex>
-      #ifdef USE_INSTANCING
-        float phase = instanceMatrix[3].x * 0.13 + instanceMatrix[3].z * 0.11;
-        float sway = max(0.0, position.y - 2.0) * 0.018;
-        transformed.x += sin(uWind * 1.4 + phase) * sway;
-        transformed.z += cos(uWind * 1.1 + phase * 1.3) * sway * 0.7;
-      #endif`,
-    );
-  };
-  return mat;
-}
-
 /**
  * Trackside dressing: vegetation (chunked instancing for frustum culling), rocks,
  * pit building, grandstand, start gantry, sponsor bridge, billboards and signs.
@@ -95,9 +39,7 @@ export class TrackScenery {
   /** Additive light pools painted on the asphalt under the floodlights. */
   private poolMat!: THREE.MeshBasicMaterial;
   private rnd: Random;
-  /** Tree chunks, culled by distance beyond the fog. */
-  private treeChunks: THREE.InstancedMesh[] = [];
-  private readonly _c = new THREE.Vector3();
+  readonly vegetation: Vegetation;
 
   constructor(
     readonly track: TrackGeometry,
@@ -107,7 +49,7 @@ export class TrackScenery {
   ) {
     this.group.name = 'scenery';
     this.rnd = new Random(track.def.scenery.seed);
-    this.buildVegetation();
+    this.vegetation = new Vegetation(track, terrain, (x, z) => this.inComplex(x, z) || this.inLake(x, z), track.def.scenery.seed, track.def.scenery.treeCount);
     this.buildRocks();
     this.buildPitBuilding();
     this.buildGrandstand();
@@ -116,113 +58,43 @@ export class TrackScenery {
     this.buildBillboards();
     this.buildCornerSigns();
     this.buildFloodlights();
+    this.buildLake();
+    this.group.add(new Trackside(track, terrain, layout, track.def.scenery.seed + 9).group);
     // Collapse the hundreds of static prop meshes into one draw call per material.
-    mergeByMaterial(this.group);
+    this.atlasSigns();
+    mergeByMaterial(this.group, new Set(), 400);
+    this.group.add(this.vegetation.group);
+  }
+
+  /**
+   * Moves every sign-like material (non-repeating canvas texture, not emissive) onto the
+   * shared sign atlas so all boards/banners/chevrons merge into one draw call per chunk.
+   * Thin boards don't cast shadows (their frames and posts do).
+   */
+  private atlasSigns(): void {
+    const atlas = tex.SignAtlas.get();
+    this.group.traverse((o) => {
+      if (!(o instanceof THREE.Mesh) || o instanceof THREE.InstancedMesh) return;
+      const m = o.material as THREE.MeshStandardMaterial;
+      if (!(m instanceof THREE.MeshStandardMaterial) || !m.map || m.emissiveMap || m.alphaTest > 0) return;
+      if (m.map.wrapS === THREE.RepeatWrapping || !(m.map.image instanceof HTMLCanvasElement)) return;
+      o.geometry = atlas.remapUV(o.geometry.clone(), m.map);
+      o.material = atlas.material;
+      o.castShadow = false;
+    });
+  }
+
+  /** Inside (or right at the edge of) the infield lake? */
+  private inLake(x: number, z: number, margin = 1.15): boolean {
+    const L = this.terrain.lake;
+    return !!L && Math.hypot(x - L.x, z - L.z) < this.terrain.lakeRadiusAt(x, z) * margin;
   }
 
   /** Is (x,z) inside the start/finish complex footprint? */
   private inComplex(x: number, z: number): boolean {
     const p = this.track.project(x, z);
     const ds = this.track.deltaS(0, p.s);
-    return ds > -230 && ds < 130 && p.distance < 70;
-  }
-
-  private buildVegetation(): void {
-    const tr = this.terrain;
-    const def = this.track.def;
-    const noise = new Noise2D(def.scenery.seed + 3);
-    const shapeNoise = new Noise2D(9);
-    const kinds: TreeKind[] = ['pine', 'broad', 'cypress'];
-    const parts = Object.fromEntries(kinds.map((k) => [k, makeTreeParts(k, shapeNoise)])) as Record<TreeKind, TreeParts>;
-    const CH = 4;
-    const chunkSize = tr.size / CH;
-    type Inst = { m: THREE.Matrix4; c: THREE.Color };
-    const buckets = new Map<string, Inst[]>();
-    const bucket = (kind: TreeKind, cx: number, cz: number) => {
-      const key = `${kind}:${cx}:${cz}`;
-      let b = buckets.get(key);
-      if (!b) buckets.set(key, (b = []));
-      return b;
-    };
-    // One geometry per species: trunk + foliage, with a per-vertex trunk flag for the shader.
-    const merged = Object.fromEntries(
-      kinds.map((k) => {
-        const t = parts[k].trunk.index ? parts[k].trunk.toNonIndexed() : parts[k].trunk.clone();
-        const f = parts[k].foliage.index ? parts[k].foliage.toNonIndexed() : parts[k].foliage.clone();
-        for (const g of [t, f]) for (const name of Object.keys(g.attributes)) if (!['position', 'normal'].includes(name)) g.deleteAttribute(name);
-        t.setAttribute('trunk', new THREE.Float32BufferAttribute(new Float32Array(t.attributes.position.count).fill(1), 1));
-        f.setAttribute('trunk', new THREE.Float32BufferAttribute(new Float32Array(f.attributes.position.count), 1));
-        return [k, mergeGeometries([t, f])!];
-      }),
-    ) as Record<TreeKind, THREE.BufferGeometry>;
-    const rnd = this.rnd;
-    const q = new THREE.Quaternion();
-    const up = new THREE.Vector3(0, 1, 0);
-    let placed = 0;
-    const target = def.scenery.treeCount;
-    const bo = def.barrierOffset;
-    for (let attempt = 0; attempt < target * 8 && placed < target; attempt++) {
-      const x = tr.originX + 50 + rnd.next() * (tr.size - 100);
-      const z = tr.originZ + 50 + rnd.next() * (tr.size - 100);
-      const d = tr.distanceAt(x, z);
-      if (d < bo + 9) continue;
-      const cluster = noise.fbm(x / 140, z / 140, 3) * 0.5 + 0.5;
-      // Denser near the track (for a sense of speed) and in noise clusters.
-      const nearBoost = d < bo + 60 ? 0.25 : 0;
-      if (rnd.next() > cluster * 1.25 + nearBoost - 0.3) continue;
-      if (this.inComplex(x, z)) continue;
-      const kind: TreeKind = cluster > 0.62 ? (rnd.next() < 0.75 ? 'pine' : 'cypress') : rnd.next() < 0.7 ? 'broad' : rnd.next() < 0.5 ? 'cypress' : 'pine';
-      const y = tr.heightAt(x, z) - 0.2;
-      const s = rnd.range(0.75, 1.45) * (kind === 'pine' ? 1.15 : 1);
-      q.setFromAxisAngle(up, rnd.next() * Math.PI * 2);
-      const m = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(s, s * rnd.range(0.9, 1.2), s));
-      const cx = Math.min(CH - 1, Math.max(0, Math.floor((x - tr.originX) / chunkSize)));
-      const cz = Math.min(CH - 1, Math.max(0, Math.floor((z - tr.originZ) / chunkSize)));
-      const b = bucket(kind, cx, cz);
-      const c = new THREE.Color(rnd.pick(parts[kind].colors)).multiplyScalar(rnd.range(0.85, 1.12));
-      b.push({ m, c });
-      placed++;
-    }
-
-    const foliageMat = swayMaterial(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, flatShading: true }));
-    for (const [key, list] of buckets) {
-      const kind = key.split(':')[0] as TreeKind;
-      const im = new THREE.InstancedMesh(merged[kind], foliageMat, list.length);
-      list.forEach((inst, i) => {
-        im.setMatrixAt(i, inst.m);
-        im.setColorAt(i, inst.c);
-      });
-      im.castShadow = true;
-      im.receiveShadow = true;
-      im.computeBoundingSphere();
-      this.group.add(im);
-      this.treeChunks.push(im);
-    }
-
-    // Low bushes lining the outside of the barriers.
-    const bushGeo = displace(new THREE.IcosahedronGeometry(0.9, 1).scale(1.3, 0.7, 1.1).toNonIndexed(), shapeNoise, 0.25, 1.5);
-    const bushes: THREE.Matrix4[] = [];
-    const bushColors: THREE.Color[] = [];
-    for (let i = 0; i < 650; i++) {
-      const s = rnd.next() * this.track.length;
-      const side = rnd.next() < 0.5 ? -1 : 1;
-      const lat = side * (bo + rnd.range(3, 16));
-      const p = this.track.offsetPoint(s, lat, new THREE.Vector3());
-      if (this.track.distanceToCenterline(p.x, p.z) < bo + 2.5) continue;
-      if (this.inComplex(p.x, p.z)) continue;
-      const sc = rnd.range(0.6, 1.5);
-      q.setFromAxisAngle(up, rnd.next() * 6.28);
-      bushes.push(new THREE.Matrix4().compose(new THREE.Vector3(p.x, this.terrain.heightAt(p.x, p.z), p.z), q, new THREE.Vector3(sc, sc, sc)));
-      bushColors.push(new THREE.Color(rnd.pick([0x56692c, 0x6b7433, 0x4a5e27, 0x7d7a36])));
-    }
-    const bim = new THREE.InstancedMesh(bushGeo, foliageMat, bushes.length);
-    bushes.forEach((m, i) => {
-      bim.setMatrixAt(i, m);
-      bim.setColorAt(i, bushColors[i]);
-    });
-    bim.castShadow = true;
-    bim.receiveShadow = true;
-    this.group.add(bim);
+    return ds > -230 && ds < 130 && p.distance < 95;
   }
 
   private buildRocks(): void {
@@ -236,13 +108,17 @@ export class TrackScenery {
     const bo = this.track.def.barrierOffset;
     const q = new THREE.Quaternion();
     const e = new THREE.Euler();
-    for (let a = 0; a < this.track.def.scenery.rockCount * 6 && list.length < this.track.def.scenery.rockCount; a++) {
+    for (let a = 0; a < this.track.def.scenery.rockCount * 20 && list.length < this.track.def.scenery.rockCount; a++) {
       const x = tr.originX + 40 + rnd.next() * (tr.size - 80);
       const z = tr.originZ + 40 + rnd.next() * (tr.size - 80);
       const d = tr.distanceAt(x, z);
       if (d < bo + 5) continue;
-      if (this.inComplex(x, z)) continue;
-      const s = rnd.range(0.4, 2.6) * (d > 120 ? 1.5 : 1);
+      if (this.inComplex(x, z) || this.inLake(x, z)) continue;
+      // Boulders gather on slopes and rocky high ground.
+      const y0 = tr.heightAt(x, z);
+      const slope = Math.abs(tr.heightAt(x + 3, z) - tr.heightAt(x - 3, z)) + Math.abs(tr.heightAt(x, z + 3) - tr.heightAt(x, z - 3));
+      if (rnd.next() > 0.12 + Math.min(0.8, slope * 0.15) + (y0 > 40 ? 0.3 : 0)) continue;
+      const s = rnd.range(0.4, 2.6) * (d > 120 ? 1.6 : 1) * (slope > 3 ? 1.4 : 1);
       e.set(rnd.next() * 3, rnd.next() * 3, rnd.next() * 3);
       q.setFromEuler(e);
       list.push(new THREE.Matrix4().compose(new THREE.Vector3(x, tr.heightAt(x, z) - s * 0.3, z), q, new THREE.Vector3(s * rnd.range(0.8, 1.5), s * rnd.range(0.5, 0.9), s)));
@@ -484,7 +360,7 @@ export class TrackScenery {
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      opacity: 0.42,
+      opacity: 0.28,
       polygonOffset: true,
       polygonOffsetFactor: -3,
       polygonOffsetUnits: -3,
@@ -497,6 +373,8 @@ export class TrackScenery {
     let k = 0;
     for (let s = 20; s < t.length - 20; s += spacing, k++) {
       const side = k % 2 === 0 ? 1 : -1;
+      // Keep the pit lane (right of the main straight) clear of poles.
+      if (side === 1 && Math.abs(t.deltaS(0, s)) < 230) continue;
       const lat = side * (bo + 2.6);
       const p = t.offsetPoint(s, lat, new THREE.Vector3());
       if (t.distanceToCenterline(p.x, p.z) < bo + 1) continue; // inside of a tight corner
@@ -546,17 +424,42 @@ export class TrackScenery {
     }
   }
 
-  /** Hide tree chunks that are entirely beyond `maxDistance` (fully fogged anyway). */
+  /** Vegetation LOD / culling around the camera (Infinity = show everything, for warm-up). */
   updateCulling(camera: THREE.Vector3, maxDistance: number): void {
-    for (const im of this.treeChunks) {
-      const bs = im.boundingSphere;
-      if (!bs) continue;
-      this._c.copy(bs.center);
-      im.visible = this._c.distanceTo(camera) - bs.radius < maxDistance;
-    }
+    if (maxDistance === Infinity) this.vegetation.showAll();
+    else this.vegetation.update(camera, maxDistance);
   }
 
   /** Switch trackside lighting for night races. */
+  private waterMat: THREE.MeshPhysicalMaterial | null = null;
+
+  /** Reflective lake surface with scrolling ripples. */
+  private buildLake(): void {
+    const L = this.terrain.lake;
+    if (!L) return;
+    const normal = tex.waterNormal();
+    normal.repeat.set(L.r / 6, L.r / 6);
+    this.waterMat = new THREE.MeshPhysicalMaterial({
+      color: 0x1d3c46,
+      roughness: 0.06,
+      metalness: 0,
+      clearcoat: 1,
+      clearcoatRoughness: 0.08,
+      normalMap: normal,
+      normalScale: new THREE.Vector2(0.35, 0.35),
+      envMapIntensity: 1.3,
+    });
+    const water = new THREE.Mesh(new THREE.CircleGeometry(L.r * 1.35, 64).rotateX(-Math.PI / 2), this.waterMat);
+    water.position.set(L.x, L.level, L.z);
+    water.receiveShadow = true;
+    this.group.add(water);
+  }
+
+  /** Per-frame animation of scenery (water ripples). */
+  update(time: number): void {
+    if (this.waterMat?.normalMap) this.waterMat.normalMap.offset.set(time * 0.012, time * 0.007);
+  }
+
   setNight(on: boolean): void {
     this.floodLampMat.emissiveIntensity = on ? 9 : 0;
     this.floodLampMat.color.setHex(on ? 0xffffff : 0x9a9a9a);

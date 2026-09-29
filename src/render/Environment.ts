@@ -82,6 +82,75 @@ function createNightSky(preset: EnvironmentPreset, radius: number, withStars: bo
   return mesh;
 }
 
+/** Procedural cloud layer: a dome with fBm clouds lit from the sun/moon direction. */
+function createClouds(preset: EnvironmentPreset, sunDir: THREE.Vector3): THREE.Mesh {
+  const night = preset.sky === 'night';
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uSunDir: { value: sunDir.clone().normalize() },
+      uLit: { value: night ? new THREE.Color(0.16, 0.18, 0.24) : new THREE.Color(1.35, 0.92, 0.7) },
+      uShade: { value: night ? new THREE.Color(0.04, 0.05, 0.07) : new THREE.Color(0.55, 0.46, 0.52) },
+      uCover: { value: night ? 0.56 : 0.5 },
+      uOpacity: { value: night ? 0.55 : 0.9 },
+      uTime: { value: 0 },
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        gl_Position.z = gl_Position.w * 0.9999;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uSunDir;
+      uniform vec3 uLit;
+      uniform vec3 uShade;
+      uniform float uCover;
+      uniform float uOpacity;
+      uniform float uTime;
+      varying vec3 vDir;
+      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float vnoise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+      }
+      float fbm(vec2 p) {
+        float s = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 5; i++) {
+          s += vnoise(p) * a;
+          p = p * 2.03 + vec2(1.7, 9.2);
+          a *= 0.5;
+        }
+        return s;
+      }
+      void main() {
+        vec3 d = normalize(vDir);
+        if (d.y < 0.01) discard;
+        vec2 uv = d.xz / (d.y + 0.15) * 1.6 + vec2(uTime * 0.006, uTime * 0.0025);
+        float n = fbm(uv) + fbm(uv * 3.1) * 0.18;
+        float cover = smoothstep(uCover, uCover + 0.28, n) * smoothstep(0.01, 0.2, d.y);
+        if (cover < 0.01) discard;
+        float thick = smoothstep(uCover, uCover + 0.55, n);
+        float toward = pow(max(dot(d, normalize(uSunDir)), 0.0), 3.0);
+        vec3 col = mix(uLit, uShade, thick * 0.75) + uLit * toward * 0.5;
+        gl_FragColor = vec4(col, cover * uOpacity);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    fog: false,
+    side: THREE.BackSide,
+  });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(4200, 48, 16, 0, Math.PI * 2, 0, Math.PI / 2), mat);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = -1;
+  return mesh;
+}
+
 /**
  * Sky, key light, ambient light, fog, image-based lighting and distant mountain
  * silhouettes, built from an EnvironmentPreset (sunset, night...). The key light's shadow
@@ -91,6 +160,7 @@ export class Environment {
   readonly sun: THREE.DirectionalLight;
   readonly hemi: THREE.HemisphereLight;
   readonly sky: THREE.Object3D;
+  private readonly clouds: THREE.Mesh;
   readonly sunDirection = new THREE.Vector3();
   readonly group = new THREE.Group();
   private envMap: THREE.Texture | null = null;
@@ -120,6 +190,8 @@ export class Environment {
       this.sky = createNightSky(env, 5000, true);
     }
     this.group.add(this.sky);
+    this.clouds = createClouds(env, env.sky === 'night' ? direction(env.moonElevation ?? 25, env.moonAzimuth ?? 0) : this.sunDirection);
+    this.group.add(this.clouds);
 
     // Reuse the fog object so materials/particles holding a reference stay in sync.
     if (scene.fog instanceof THREE.Fog) {
@@ -275,6 +347,12 @@ export class Environment {
     this.sun.target.updateMatrixWorld();
     // Sky dome follows the camera focus so it never clips.
     this.sky.position.set(focus.x, 0, focus.z);
+    this.clouds.position.set(focus.x, 0, focus.z);
+  }
+
+  /** Slow cloud drift. */
+  setTime(t: number): void {
+    (this.clouds.material as THREE.ShaderMaterial).uniforms.uTime.value = t;
   }
 
   dispose(): void {

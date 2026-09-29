@@ -405,6 +405,8 @@ export class Game {
     const fog = this.scene.fog as THREE.Fog;
     this.trackScene.scenery.updateCulling(this.camera.position, fog.far);
     windUniform.value = this.elapsed;
+    this.trackScene.scenery.update(this.elapsed);
+    this.env.setTime(this.elapsed);
 
     if (!this.state.is('MENU', 'LOADING')) this.hud.update(session.rm, dt);
     if (this.state.is('FINISHED')) {

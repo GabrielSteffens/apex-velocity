@@ -46,86 +46,168 @@ export class TrackBuilder {
     mergeByMaterial(this.group, keep);
   }
 
+  /**
+   * Terrain: per-vertex tint (grass colour variation, mowed stripes) and splat weights
+   * (rock on steep slopes and peaks, dirt patches, sand on the lake shore) blended in the
+   * shader with two-scale texture sampling so the grass never visibly tiles. Split into
+   * chunks so off-screen parts are culled.
+   */
   private buildTerrain(): void {
     const tr = this.terrain;
     const n = tr.segments + 1;
     const pos = new Float32Array(n * n * 3);
     const uv = new Float32Array(n * n * 2);
-    const col = new Float32Array(n * n * 3);
+    const tint = new Float32Array(n * n * 3);
+    const splat = new Float32Array(n * n * 3);
+    const norm = new Float32Array(n * n * 3);
     const noise = new Noise2D(tr.track.def.terrain.seed + 55);
-    const lush = new THREE.Color(0x4f6a2a);
-    const mowed = new THREE.Color(0x5b7a30);
-    const dry = new THREE.Color(0xb39a58);
-    const olive = new THREE.Color(0x77763a);
-    const dirt = new THREE.Color(0x8a6a48);
+    const lush = new THREE.Color(0x587630);
+    const mowed = new THREE.Color(0x587a34);
+    const dry = new THREE.Color(0xc2a45e);
+    const olive = new THREE.Color(0x86863e);
+    const forest = new THREE.Color(0x3f5a24);
     const c = new THREE.Color();
     const bo = tr.track.def.barrierOffset;
+    const lake = tr.lake;
     for (let j = 0; j < n; j++) {
       for (let i = 0; i < n; i++) {
         const k = j * n + i;
         const x = tr.originX + i * tr.cell;
         const z = tr.originZ + j * tr.cell;
+        const y = tr.heights[k];
         pos[k * 3] = x;
-        pos[k * 3 + 1] = tr.heights[k];
+        pos[k * 3 + 1] = y;
         pos[k * 3 + 2] = z;
         uv[k * 2] = x / 7;
         uv[k * 2 + 1] = z / 7;
         const d = tr.trackDistance[k];
-        const nv = noise.fbm(x / 160, z / 160, 3) * 0.5 + 0.5;
-        const fine = noise.get(x / 18, z / 18) * 0.5 + 0.5;
-        c.copy(olive).lerp(dry, smoothstep(0.35, 0.7, nv));
-        c.lerp(lush, smoothstep(0.55, 0.2, nv) * 0.6);
-        // Mowed runoff near the track with stripes.
-        const near = smoothstep(bo + 14, bo + 2, d);
-        const stripe = Math.sin((x + z) * 0.18) > 0 ? 1 : 0.9;
-        const mow = mowed.clone().multiplyScalar(stripe);
-        c.lerp(mow, near);
-        // Steep slopes show dirt.
-        const hx = tr.heights[j * n + Math.min(n - 1, i + 1)] - tr.heights[k];
-        const hz = tr.heights[Math.min(n - 1, j + 1) * n + i] - tr.heights[k];
-        const slope = Math.hypot(hx, hz) / tr.cell;
-        c.lerp(dirt, smoothstep(0.35, 0.8, slope) * 0.8);
-        c.multiplyScalar(0.85 + fine * 0.25);
-        col[k * 3] = c.r;
-        col[k * 3 + 1] = c.g;
-        col[k * 3 + 2] = c.b;
+        const nv = noise.fbm(x / 170, z / 170, 3) * 0.5 + 0.5;
+        const fine = noise.get(x / 23, z / 23) * 0.5 + 0.5;
+        c.copy(olive).lerp(dry, smoothstep(0.4, 0.75, nv));
+        c.lerp(lush, smoothstep(0.5, 0.2, nv) * 0.7);
+        c.lerp(forest, smoothstep(0.62, 0.8, noise.get(x / 90 + 40, z / 90)) * 0.5);
+        // Mowed verges near the track, in stripes.
+        const near = smoothstep(bo + 16, bo + 3, d);
+        const stripe = Math.sin((x * 0.8 + z) * 0.16) > 0 ? 1.04 : 0.9;
+        c.lerp(mowed.clone().multiplyScalar(stripe), near);
+        c.multiplyScalar(0.88 + fine * 0.22);
+        tint[k * 3] = c.r;
+        tint[k * 3 + 1] = c.g;
+        tint[k * 3 + 2] = c.b;
+        // Splat weights
+        const hx = tr.heights[j * n + Math.min(n - 1, i + 1)] - tr.heights[j * n + Math.max(0, i - 1)];
+        const hz = tr.heights[Math.min(n - 1, j + 1) * n + i] - tr.heights[Math.max(0, j - 1) * n + i];
+        const slope = Math.hypot(hx, hz) / (2 * tr.cell);
+        // Normals from the whole heightfield (no lighting seams between chunks).
+        const nx = -hx / (2 * tr.cell);
+        const nz = -hz / (2 * tr.cell);
+        const nl = Math.hypot(nx, 1, nz);
+        norm[k * 3] = nx / nl;
+        norm[k * 3 + 1] = 1 / nl;
+        norm[k * 3 + 2] = nz / nl;
+        let rock = smoothstep(0.42, 0.85, slope) + smoothstep(70, 130, y) * 0.6;
+        rock *= 1 - near;
+        let dirtW = smoothstep(0.66, 0.82, noise.get(x / 45 - 13, z / 45 + 5)) * 0.8 * (1 - near);
+        dirtW = Math.max(dirtW, smoothstep(0.2, 0.35, slope) * 0.5 * (1 - near));
+        let sand = 0;
+        if (lake) {
+          const ld = Math.hypot(x - lake.x, z - lake.z) / tr.lakeRadiusAt(x, z);
+          sand = smoothstep(1.14, 1.0, ld) * 0.85;
+        }
+        splat[k * 3] = Math.min(1, rock);
+        splat[k * 3 + 1] = Math.min(1, dirtW);
+        splat[k * 3 + 2] = sand;
       }
     }
-    const idx = new Uint32Array(tr.segments * tr.segments * 6);
-    let p = 0;
-    for (let j = 0; j < tr.segments; j++) {
-      for (let i = 0; i < tr.segments; i++) {
-        const a = j * n + i;
-        const b = a + 1;
-        const cc = a + n;
-        const d = cc + 1;
-        idx[p++] = a;
-        idx[p++] = cc;
-        idx[p++] = b;
-        idx[p++] = b;
-        idx[p++] = cc;
-        idx[p++] = d;
-      }
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    g.setIndex(new THREE.BufferAttribute(idx, 1));
-    g.computeVertexNormals();
     const gr = tex.grass();
+    const rockT = tex.rock();
+    const dirtT = tex.dirt();
+    const sandT = tex.gravel();
     const mat = new THREE.MeshStandardMaterial({
       map: gr.map,
       normalMap: gr.normalMap,
       normalScale: new THREE.Vector2(0.6, 0.6),
-      vertexColors: true,
       roughness: 0.95,
       metalness: 0,
     });
-    const mesh = new THREE.Mesh(g, mat);
-    mesh.receiveShadow = true;
-    mesh.name = 'terrain';
-    this.group.add(mesh);
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uRock = { value: rockT.map };
+      sh.uniforms.uDirt = { value: dirtT.map };
+      sh.uniforms.uSand = { value: sandT.map };
+      sh.vertexShader =
+        'attribute vec3 tint;\nattribute vec3 splat;\nvarying vec3 vTint;\nvarying vec3 vSplat;\n' +
+        sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vTint = tint;\n  vSplat = splat;');
+      sh.fragmentShader =
+        'uniform sampler2D uRock;\nuniform sampler2D uDirt;\nuniform sampler2D uSand;\nvarying vec3 vTint;\nvarying vec3 vSplat;\n' +
+        sh.fragmentShader.replace(
+          '#include <map_fragment>',
+          `vec3 g1 = texture2D(map, vMapUv).rgb;
+          vec3 g2 = texture2D(map, vMapUv * 0.21 + vec2(0.31, 0.77)).rgb;
+          vec3 terrainCol = mix(g1, g2, 0.5) * vTint * 1.85;
+          float macro = texture2D(uDirt, vMapUv * 0.029).r;
+          terrainCol *= 0.78 + macro * 0.55;
+          float lumT = dot(terrainCol, vec3(0.3, 0.59, 0.11));
+          terrainCol = mix(vec3(lumT), terrainCol, 0.82);
+          terrainCol = mix(terrainCol, texture2D(uDirt, vMapUv * 0.8).rgb, vSplat.y);
+          terrainCol = mix(terrainCol, texture2D(uSand, vMapUv * 1.1).rgb, vSplat.z);
+          terrainCol = mix(terrainCol, texture2D(uRock, vMapUv * 0.45).rgb * 0.95, vSplat.x);
+          diffuseColor.rgb *= terrainCol;`,
+        );
+    };
+    mat.customProgramCacheKey = () => 'terrain-splat';
+
+    // Chunked meshes (shared material) for frustum culling.
+    const CH = 6;
+    const per = Math.ceil(tr.segments / CH);
+    for (let cj = 0; cj < CH; cj++) {
+      for (let ci = 0; ci < CH; ci++) {
+        const i0 = ci * per;
+        const j0 = cj * per;
+        const i1 = Math.min(tr.segments, i0 + per);
+        const j1 = Math.min(tr.segments, j0 + per);
+        if (i0 >= i1 || j0 >= j1) continue;
+        const w = i1 - i0 + 1;
+        const h = j1 - j0 + 1;
+        const cp = new Float32Array(w * h * 3);
+        const cu = new Float32Array(w * h * 2);
+        const ct = new Float32Array(w * h * 3);
+        const cs = new Float32Array(w * h * 3);
+        const cn = new Float32Array(w * h * 3);
+        for (let j = 0; j < h; j++) {
+          for (let i = 0; i < w; i++) {
+            const src = (j0 + j) * n + (i0 + i);
+            const dst = j * w + i;
+            cp.set(pos.subarray(src * 3, src * 3 + 3), dst * 3);
+            cu.set(uv.subarray(src * 2, src * 2 + 2), dst * 2);
+            ct.set(tint.subarray(src * 3, src * 3 + 3), dst * 3);
+            cs.set(splat.subarray(src * 3, src * 3 + 3), dst * 3);
+            cn.set(norm.subarray(src * 3, src * 3 + 3), dst * 3);
+          }
+        }
+        const idx: number[] = [];
+        for (let j = 0; j < h - 1; j++) {
+          for (let i = 0; i < w - 1; i++) {
+            const a = j * w + i;
+            const b = a + 1;
+            const cc = a + w;
+            const d = cc + 1;
+            idx.push(a, cc, b, b, cc, d);
+          }
+        }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(cp, 3));
+        g.setAttribute('uv', new THREE.BufferAttribute(cu, 2));
+        g.setAttribute('tint', new THREE.BufferAttribute(ct, 3));
+        g.setAttribute('splat', new THREE.BufferAttribute(cs, 3));
+        g.setAttribute('normal', new THREE.BufferAttribute(cn, 3));
+        g.setIndex(idx);
+        g.computeBoundingSphere();
+        const mesh = new THREE.Mesh(g, mat);
+        mesh.receiveShadow = true;
+        mesh.name = 'terrain';
+        this.group.add(mesh);
+      }
+    }
   }
 
   private buildRoad(): void {

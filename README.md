@@ -97,7 +97,11 @@ Key design points:
 ## What is implemented
 
 - Sunset Circuit (2.46 km): long pit straight, esses, crest, chicane, hairpin, elevation changes,
-  curbs, runoff, barriers, grid, start/finish gantry with countdown lights, grandstand, pits, signs.
+  curbs, gravel traps and painted asphalt run-off (with their own grip), barriers with catch fences
+  and sponsor banners, grid, start/finish gantry with countdown lights, grandstand, pit lane,
+  paddock with team trucks, marshal posts, signs.
+- Landscape: ridged mountains, splat-shaded terrain (grass / dry grass / dirt / rock / sand), an
+  infield lake, ~5,500 trees in forests with LOD, grass tufts, drifting procedural clouds.
 - Falcon R with working suspension, speed-sensitive smoothed steering (front wheels visibly steer),
   automatic gearbox, braking, reverse, handbrake drifting, slipstream, grass/curb surfaces, air control.
 - 5 AI opponents (1–7 configurable) with individual skill, aggression, consistency and mistake rates.

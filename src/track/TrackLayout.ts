@@ -21,6 +21,17 @@ export interface CurbZone {
   endIndex: number;
 }
 
+/** Run-off surface on the outside of a corner, between the curb and the barrier. */
+export interface RunoffZone {
+  side: 1 | -1;
+  startIndex: number;
+  endIndex: number;
+  kind: 'gravel' | 'asphalt';
+  /** Lateral extent (always positive, measured from the centreline). */
+  inner: number;
+  outer: number;
+}
+
 export interface GridSlot {
   position: THREE.Vector3;
   heading: THREE.Vector3;
@@ -38,11 +49,45 @@ export class TrackLayout {
   /** Per-sample flag (bit 0 = right curb, bit 1 = left curb). */
   readonly curbMask: Uint8Array;
   readonly curbWidth = 1.3;
+  readonly runoffs: RunoffZone[] = [];
 
   constructor(readonly track: TrackGeometry, readonly terrain: Terrain) {
     this.curbMask = new Uint8Array(track.count);
     this.buildCurbs();
     this.buildBarriers();
+    this.buildRunoffs();
+  }
+
+  /**
+   * Gravel traps on the outside of tight corners (from the braking zone to the exit) and
+   * striped asphalt run-off on the outside of medium-speed corners.
+   */
+  private buildRunoffs(): void {
+    const t = this.track;
+    const n = t.count;
+    const inner = t.halfWidth + this.curbWidth + 0.15;
+    const outer = t.def.barrierOffset - 1.3;
+    for (let i = 0; i < n; i++) {
+      const k = Math.abs(t.curvature[i]);
+      if (k < 1 / 110) continue;
+      let isMax = true;
+      for (let d = -25; d <= 25; d++) if (Math.abs(t.curvature[(i + d + n) % n]) > k) isMax = false;
+      if (!isMax) continue;
+      // Skip the start/finish area.
+      if (Math.abs(t.deltaS(0, i * t.spacing)) < 80) continue;
+      const side = (t.curvature[i] > 0 ? -1 : 1) as 1 | -1; // outside of the turn
+      const tight = k > 1 / 60;
+      const before = Math.round((tight ? 55 : 35) / t.spacing);
+      const after = Math.round((tight ? 45 : 35) / t.spacing);
+      this.runoffs.push({
+        side,
+        startIndex: (i - before + n) % n,
+        endIndex: (i + after) % n,
+        kind: tight ? 'gravel' : 'asphalt',
+        inner,
+        outer,
+      });
+    }
   }
 
   private buildCurbs(): void {

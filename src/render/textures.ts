@@ -559,3 +559,179 @@ export function honeycomb(): THREE.Texture {
   cache.set(key, t);
   return t;
 }
+
+/** Generic noisy ground texture (rock / dirt / sand) with a matching normal map. */
+function groundTexture(key: string, seed: number, base: [number, number, number], variation: number, pebbles: number, scale: number, size = 256): PBRSet {
+  if (cache.has(key)) return { map: cache.get(key)!, normalMap: cache.get(key + 'n')! };
+  const rnd = new Random(seed);
+  const large = tileableNoise(size, seed, scale, 4);
+  const [c, ctx] = canvas(size, size);
+  const img = ctx.createImageData(size, size);
+  const h = new Float32Array(size * size);
+  for (let i = 0; i < size * size; i++) {
+    const g = rnd.next();
+    const v = 1 + (large[i] - 0.5) * variation + (g - 0.5) * 0.18;
+    img.data[i * 4] = Math.min(255, base[0] * v);
+    img.data[i * 4 + 1] = Math.min(255, base[1] * v);
+    img.data[i * 4 + 2] = Math.min(255, base[2] * v);
+    img.data[i * 4 + 3] = 255;
+    h[i] = large[i] + g * 0.25;
+  }
+  ctx.putImageData(img, 0, 0);
+  // Pebbles / stones
+  for (let k = 0; k < pebbles; k++) {
+    const x = rnd.next() * size;
+    const y = rnd.next() * size;
+    const r = rnd.range(1.2, 3.8);
+    const l = rnd.range(0.75, 1.3);
+    ctx.fillStyle = `rgb(${Math.floor(base[0] * l)},${Math.floor(base[1] * l)},${Math.floor(base[2] * l)})`;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * rnd.range(0.6, 1), rnd.next() * 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(x + 0.8, y + 1.1, r, r * 0.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const map = finish(c, true);
+  const normalMap = finish(normalFromHeight(h, size, 2.5), false);
+  cache.set(key, map);
+  cache.set(key + 'n', normalMap);
+  return { map, normalMap };
+}
+
+export const rock = () => groundTexture('rock', 71, [128, 122, 114], 0.7, 70, 3);
+export const dirt = () => groundTexture('dirt', 72, [132, 104, 74], 0.45, 160, 5);
+/** Beige gravel for run-off traps. */
+export const gravel = () => groundTexture('gravel', 73, [196, 180, 150], 0.25, 5000, 8, 512);
+
+/** Tileable ripple normal map for water. */
+export function waterNormal(): THREE.Texture {
+  const key = 'waterN';
+  if (cache.has(key)) return cache.get(key)!;
+  const size = 256;
+  const a = tileableNoise(size, 91, 6, 3);
+  const b = tileableNoise(size, 92, 14, 2);
+  const h = new Float32Array(size * size);
+  for (let i = 0; i < h.length; i++) h[i] = a[i] * 0.7 + b[i] * 0.3;
+  const t = finish(normalFromHeight(h, size, 4), false);
+  cache.set(key, t);
+  return t;
+}
+
+/** Weathered red/white painted asphalt for run-off areas (bands run across the track). */
+export function runoffStripes(): THREE.Texture {
+  const key = 'runoffStripes';
+  if (cache.has(key)) return cache.get(key)!;
+  const size = 256;
+  const [c, ctx] = canvas(size, size);
+  const rnd = new Random(33);
+  for (let y = 0; y < size; y++) {
+    const band = Math.floor((y / size) * 2) % 2;
+    ctx.fillStyle = band ? '#c23a30' : '#dcd8cf';
+    ctx.fillRect(0, y, size, 1);
+  }
+  // Wear and asphalt showing through
+  for (let i = 0; i < 5000; i++) {
+    ctx.fillStyle = `rgba(40,40,42,${rnd.range(0.05, 0.3)})`;
+    ctx.fillRect(rnd.next() * size, rnd.next() * size, rnd.range(1, 3), rnd.range(1, 3));
+  }
+  const t = finish(c, true);
+  cache.set(key, t);
+  return t;
+}
+
+/** Chain-link catch-fence mesh (alpha-tested). */
+export function chainLink(): THREE.Texture {
+  const key = 'chainLink';
+  if (cache.has(key)) return cache.get(key)!;
+  const [c, ctx] = canvas(64, 64);
+  ctx.clearRect(0, 0, 64, 64);
+  ctx.strokeStyle = 'rgba(190,195,200,1)';
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(0, 32);
+  ctx.lineTo(32, 0);
+  ctx.lineTo(64, 32);
+  ctx.lineTo(32, 64);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-32, 32);
+  ctx.lineTo(0, 64);
+  ctx.moveTo(64, 0);
+  ctx.lineTo(96, 32);
+  ctx.stroke();
+  const t = finish(c, true);
+  t.generateMipmaps = true;
+  cache.set(key, t);
+  return t;
+}
+
+/**
+ * Texture atlas for signage: every billboard, banner, marker board and chevron is drawn
+ * into one canvas so all signs share ONE material (and merge into a single draw call per
+ * map chunk). Geometry UVs are remapped into each image's slot with `remapUV`.
+ */
+export class SignAtlas {
+  readonly width = 2048;
+  readonly height = 2048;
+  readonly texture: THREE.CanvasTexture;
+  readonly material: THREE.MeshStandardMaterial;
+  private ctx: CanvasRenderingContext2D;
+  private slots = new Map<object, { x: number; y: number; w: number; h: number }>();
+  private shelfX = 0;
+  private shelfY = 0;
+  private shelfH = 0;
+  private static inst: SignAtlas | null = null;
+
+  static get(): SignAtlas {
+    if (!SignAtlas.inst) SignAtlas.inst = new SignAtlas();
+    return SignAtlas.inst;
+  }
+
+  private constructor() {
+    const [c, ctx] = canvas(this.width, this.height);
+    this.ctx = ctx;
+    this.texture = new THREE.CanvasTexture(c);
+    this.texture.colorSpace = THREE.SRGBColorSpace;
+    this.texture.anisotropy = 8;
+    this.material = new THREE.MeshStandardMaterial({ map: this.texture, roughness: 0.55, side: THREE.DoubleSide });
+  }
+
+  /** Slot (in canvas pixels) for a texture's image, packing it on first use. */
+  private slot(t: THREE.Texture) {
+    const img = t.image as HTMLCanvasElement;
+    let s = this.slots.get(img);
+    if (s) return s;
+    const pad = 6;
+    const w = img.width;
+    const h = img.height;
+    if (this.shelfX + w + pad > this.width) {
+      this.shelfX = 0;
+      this.shelfY += this.shelfH + pad;
+      this.shelfH = 0;
+    }
+    s = { x: this.shelfX, y: this.shelfY, w, h };
+    // Edge-extend by drawing slightly larger first (reduces mip bleeding), then exact.
+    this.ctx.drawImage(img, s.x - 2, s.y - 2, w + 4, h + 4);
+    this.ctx.drawImage(img, s.x, s.y, w, h);
+    this.shelfX += w + pad;
+    this.shelfH = Math.max(this.shelfH, h);
+    this.slots.set(img, s);
+    this.texture.needsUpdate = true;
+    return s;
+  }
+
+  /** Remaps a geometry's 0..1 UVs into the atlas slot of `t`. */
+  remapUV(g: THREE.BufferGeometry, t: THREE.Texture): THREE.BufferGeometry {
+    const s = this.slot(t);
+    const uv = g.attributes.uv as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) {
+      const u = uv.getX(i);
+      const v = uv.getY(i);
+      uv.setXY(i, (s.x + u * s.w) / this.width, 1 - (s.y + (1 - v) * s.h) / this.height);
+    }
+    return g;
+  }
+}

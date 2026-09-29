@@ -108,7 +108,7 @@ export const tracks: TrackDefinition[] = [
       },
     },
     terrain: { seed: 7, hilliness: 1, size: 1800 },
-    scenery: { treeCount: 1700, rockCount: 260, seed: 42 },
+    scenery: { treeCount: 5500, rockCount: 320, seed: 42 },
     difficulty: 3,
   },
 ];

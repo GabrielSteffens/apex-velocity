@@ -18,11 +18,15 @@ export class Terrain {
   readonly trackDistance: Float32Array;
   private noise: Noise2D;
   private detail: Noise2D;
+  private warp: Noise2D;
+  /** Infield lake (placed where it's furthest from the track), or null. */
+  readonly lake: { x: number; z: number; r: number; level: number } | null;
 
   constructor(readonly track: TrackGeometry, cellSize = 5) {
     const def = track.def.terrain;
     this.noise = new Noise2D(def.seed);
     this.detail = new Noise2D(def.seed + 101);
+    this.warp = new Noise2D(def.seed + 202);
     this.size = def.size;
     this.segments = Math.round(def.size / cellSize);
     this.cell = def.size / this.segments;
@@ -38,6 +42,17 @@ export class Terrain {
     const maxQuery = flat + blend + 10;
     const cx = (b.minX + b.maxX) / 2;
     const cz = (b.minZ + b.maxZ) / 2;
+
+    // Lake: the infield point furthest from any part of the track.
+    let best = { x: 0, z: 0, d: 0 };
+    for (let x = b.minX + 40; x < b.maxX - 40; x += 10) {
+      for (let z = b.minZ + 40; z < b.maxZ - 40; z += 10) {
+        const d = track.distanceToCenterline(x, z);
+        if (d > best.d) best = { x, z, d };
+      }
+    }
+    const lakeR = Math.min(95, best.d - track.def.barrierOffset - 45);
+    this.lake = lakeR > 25 ? { x: best.x, z: best.z, r: lakeR, level: this.naturalHeight(best.x, best.z, cx, cz) - 1.5 } : null;
 
     for (let j = 0; j < n; j++) {
       for (let i = 0; i < n; i++) {
@@ -57,6 +72,16 @@ export class Terrain {
           const t = smoothstep(flat, flat + blend, dist);
           h = lerp(runoff, natural, t);
         }
+        if (this.lake) {
+          const L = this.lake;
+          const d = Math.hypot(x - L.x, z - L.z) / this.lakeRadiusAt(x, z);
+          if (d < 1.8) {
+            // Bowl below the water line, a shore just above it, then back to nature.
+            const shore = L.level + 0.35;
+            if (d < 1) h = L.level - 2.6 + (2.6 + 0.35) * smoothstep(0.45, 1.0, d);
+            else h = lerp(Math.max(h, shore), h, smoothstep(1.0, 1.8, d));
+          }
+        }
         this.heights[j * n + i] = h;
         this.trackDistance[j * n + i] = dist;
       }
@@ -65,13 +90,41 @@ export class Terrain {
 
   private naturalHeight(x: number, z: number, cx: number, cz: number): number {
     const hill = this.track.def.terrain.hilliness;
-    let h = 5;
-    h += this.noise.fbm(x / 420, z / 420, 4) * 22 * hill;
-    h += this.detail.fbm(x / 70, z / 70, 3) * 2.2;
-    // Rising rim towards the edge of the map so the world feels enclosed by hills.
+    // Domain warp breaks up the regular blobs of plain fBm.
+    const wx = x + this.warp.fbm(x / 300, z / 300, 2) * 90;
+    const wz = z + this.warp.fbm(x / 300 + 17, z / 300 - 9, 2) * 90;
+    let h = 4;
+    h += this.noise.fbm(wx / 380, wz / 380, 4) * 12 * hill; // rolling valley floor
+    h += this.detail.fbm(x / 60, z / 60, 3) * 1.6;
+    // Mountains around the valley: ridged noise (sharp crests, eroded-looking flanks)
+    // rising only towards the edge of the map.
     const r = Math.hypot(x - cx, z - cz);
-    h += Math.max(0, r - 520) * 0.18 * hill + Math.pow(Math.max(0, r - 700) / 100, 2) * 6;
+    const rim = Math.max(0, Math.min(1, (r - 470) / 380));
+    if (rim > 0) {
+      let ridged = 0;
+      let amp = 1;
+      let freq = 1 / 260;
+      let norm = 0;
+      for (let o = 0; o < 4; o++) {
+        const n = 1 - Math.abs(this.noise.get(wx * freq + 31, wz * freq - 7));
+        ridged += n * n * amp;
+        norm += amp;
+        amp *= 0.5;
+        freq *= 2.1;
+      }
+      ridged /= norm;
+      h += rim * rim * (35 + ridged * 150) * hill;
+    }
     return h;
+  }
+
+  /** Lake radius in the direction of (x, z): an irregular, natural-looking shoreline. */
+  lakeRadiusAt(x: number, z: number): number {
+    const L = this.lake;
+    if (!L) return 0;
+    const a = Math.atan2(z - L.z, x - L.x);
+    const n = this.warp.get(Math.cos(a) * 1.4 + 50, Math.sin(a) * 1.4 + 50) * 0.8 + this.warp.get(Math.cos(a) * 3.1 - 20, Math.sin(a) * 3.1) * 0.35;
+    return L.r * (1 + 0.24 * n);
   }
 
   /** Bilinear height lookup, clamped to the terrain edges. */
