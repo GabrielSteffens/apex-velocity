@@ -127,6 +127,21 @@ export class RaceSession {
     };
   }
 
+  /** Scene-captured reflections on every car's glossy materials. */
+  setEnvMap(env: THREE.Texture | null, intensity: number): void {
+    for (const v of this.visuals) {
+      v.parts.root.traverse((o) => {
+        if (!(o instanceof THREE.Mesh)) return;
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+          if (!(m instanceof THREE.MeshStandardMaterial)) continue;
+          m.userData.baseEnv ??= m.envMapIntensity;
+          m.envMap = env;
+          m.envMapIntensity = m.userData.baseEnv * (env ? intensity : 1);
+        }
+      });
+    }
+  }
+
   /** Headlights on/off for every car (real spotlight only on the player's car). */
   setNight(on: boolean): void {
     for (const v of this.visuals) v.setNight(on, v.car.isPlayer);

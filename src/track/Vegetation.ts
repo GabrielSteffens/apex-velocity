@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { detailProfile } from '../core/device';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { TrackGeometry } from './TrackGeometry';
 import type { Terrain } from './Terrain';
@@ -212,7 +213,7 @@ export class Vegetation {
     treeCount: number,
   ) {
     this.group.name = 'vegetation';
-    this.buildTrees(seed, treeCount);
+    this.buildTrees(seed, Math.round(treeCount * detailProfile().trees));
     this.buildGrass(seed + 1);
   }
 
@@ -333,7 +334,8 @@ export class Vegetation {
     const up = new THREE.Vector3(0, 1, 0);
     const p = new THREE.Vector3();
     const tints = [0x86a14a, 0x9aa653, 0x7f9a43, 0xb3a860, 0x6f8f3a];
-    for (let i = 0; i < 16000; i++) {
+    const tufts = Math.round(16000 * detailProfile().grass);
+    for (let i = 0; i < tufts; i++) {
       const s = rnd.next() * t.length;
       const side = rnd.next() < 0.5 ? -1 : 1;
       const lat = side * (bo + 1.5 + Math.pow(rnd.next(), 1.6) * 45);
@@ -366,7 +368,7 @@ export class Vegetation {
 
   /** Distance-based LOD / culling; `maxDistance` is usually the fog's far plane. */
   update(camera: THREE.Vector3, maxDistance: number): void {
-    const nearDist = 280;
+    const nearDist = detailProfile().treeNearDistance;
     for (const c of this.chunks) {
       const d = this._v.copy(c.center).distanceTo(camera) - c.radius;
       const near = d < nearDist;

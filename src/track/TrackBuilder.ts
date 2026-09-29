@@ -5,7 +5,7 @@ import type { TrackLayout, BarrierRun } from './TrackLayout';
 import type { RacingLine } from '../ai/RacingLine';
 import { buildRibbon, curbProfile, roadProfile, type RibbonData } from './TrackMeshData';
 import * as tex from '../render/textures';
-import { Noise2D, smoothstep } from '../core/math';
+import { Noise2D, Random, smoothstep } from '../core/math';
 import { mergeByMaterial } from '../render/merge';
 
 function ribbonGeometry(d: RibbonData): THREE.BufferGeometry {
@@ -223,6 +223,55 @@ export class TrackBuilder {
       metalness: 0,
       color: 0xffffff,
     });
+    // Large-scale wear so the surface doesn't read as one repeating tile: resurfaced
+    // patches with seams, dusty edges, a darker polished groove and oily stains.
+    mat.onBeforeCompile = (sh) => {
+      sh.vertexShader = 'varying vec2 vRoadUv;\nvarying vec3 vRoadW;\n' + sh.vertexShader.replace(
+        '#include <worldpos_vertex>',
+        '#include <worldpos_vertex>\n  vRoadUv = uv;\n  vRoadW = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+      );
+      sh.fragmentShader =
+        `varying vec2 vRoadUv;
+        varying vec3 vRoadW;
+        float rh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float rn(vec2 p) {
+          vec2 i = floor(p), f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(rh(i), rh(i + vec2(1, 0)), f.x), mix(rh(i + vec2(0, 1)), rh(i + vec2(1, 1)), f.x), f.y);
+        }
+        float roadWear;
+        ` +
+        sh.fragmentShader
+          .replace(
+            '#include <map_fragment>',
+            `#include <map_fragment>
+            {
+              float along = vRoadUv.y * 14.0;
+              // Resurfaced rectangles (~every few hundred metres), one lane or full width.
+              float cell = floor(along / 23.0);
+              float h = rh(vec2(cell, 3.7));
+              float lane = floor(clamp(vRoadUv.x, 0.0, 0.999) * 2.0);
+              float fullW = step(0.5, rh(vec2(cell, 9.1)));
+              float inPatch = step(0.86, h) * max(fullW, step(0.5, abs(lane - step(0.5, rh(vec2(cell, 5.3))))));
+              float fa = fract(along / 23.0);
+              float seam = inPatch * (1.0 - smoothstep(0.0, 0.006, min(fa, 1.0 - fa)));
+              diffuseColor.rgb *= mix(1.0, 0.72, inPatch);
+              diffuseColor.rgb *= 1.0 - seam * 0.6;
+              // Macro blotches
+              float m = rn(vRoadW.xz * 0.035) * 0.6 + rn(vRoadW.xz * 0.11) * 0.4;
+              diffuseColor.rgb *= 0.9 + m * 0.2;
+              // Oil / fluid stains
+              float st = smoothstep(0.78, 0.9, rn(vRoadW.xz * 0.22 + 17.0)) * smoothstep(0.5, 0.7, rn(vRoadW.xz * 0.013));
+              diffuseColor.rgb *= 1.0 - st * 0.35;
+              // Dust and marbles toward the edges
+              float edge = smoothstep(0.16, 0.0, min(vRoadUv.x, 1.0 - vRoadUv.x));
+              diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.4, 0.36), edge * (0.25 + 0.2 * rn(vRoadW.xz * 0.4)));
+              roadWear = inPatch * 0.12 + st * 0.3 - edge * 0.12;
+            }`,
+          )
+          .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  roughnessFactor = clamp(roughnessFactor - roadWear, 0.25, 1.0);');
+    };
+    mat.customProgramCacheKey = () => 'road-wear';
     const mesh = new THREE.Mesh(ribbonGeometry(data), mat);
     mesh.receiveShadow = true;
     mesh.name = 'road';
@@ -286,6 +335,77 @@ export class TrackBuilder {
     lm.receiveShadow = true;
     lm.renderOrder = 1;
     this.group.add(lm);
+    this.buildBrakeMarks();
+  }
+
+  /** Dark tyre streaks laid down in the braking zones before each slow corner. */
+  private buildBrakeMarks(): void {
+    const t = this.track;
+    const L = this.line;
+    const n = t.count;
+    const pos: number[] = [];
+    const uv: number[] = [];
+    const idx: number[] = [];
+    const rnd = new Random(77);
+    // Braking zones: consecutive samples where the target speed drops.
+    let i = 0;
+    let guard = 0;
+    while (i < n && guard++ < n) {
+      if (L.speed[(i + 1) % n] < L.speed[i] - 0.05) {
+        let j = i;
+        while (j - i < n / 4 && L.speed[(j + 1) % n] < L.speed[j % n] - 0.02) j++;
+        const drop = L.speed[i] - L.speed[j % n];
+        if (drop > 12) {
+          // Several overlapping streak sets per zone, varying length and lateral spread.
+          for (let set = 0; set < 3; set++) {
+            const start = i + Math.floor(((j - i) * rnd.range(0.3, 0.7)));
+            const end = j + Math.floor(rnd.range(-2, 3));
+            const jitter = rnd.range(-0.6, 0.6);
+            for (const wheel of [-0.8, 0.8]) {
+              const base = pos.length / 3;
+              const rows = end - start + 1;
+              if (rows < 3) continue;
+              for (let r = 0; r < rows; r++) {
+                const k = (start + r + n) % n;
+                const o = L.offset[k] + jitter + wheel + Math.sin((start + r) * 0.13 + set) * 0.08;
+                const fade = Math.min(1, r / (rows * 0.3)) * Math.min(1, (rows - 1 - r) / 3);
+                for (const side of [-0.13, 0.13]) {
+                  pos.push(t.pos[k * 3] + t.right[k * 2] * (o + side), t.pos[k * 3 + 1] + 0.02, t.pos[k * 3 + 2] + t.right[k * 2 + 1] * (o + side));
+                  uv.push(fade, 0);
+                }
+                if (r < rows - 1) {
+                  const v = base + r * 2;
+                  idx.push(v, v + 1, v + 2, v + 1, v + 3, v + 2);
+                }
+              }
+            }
+          }
+        }
+        i = j + 1;
+      } else i++;
+    }
+    if (!idx.length) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    // Opacity rides in uv.x (vertex fade); the material reads it as a vertex alpha.
+    const col = new Float32Array((pos.length / 3) * 4);
+    for (let v = 0; v < pos.length / 3; v++) col.set([0.03, 0.03, 0.03, uv[v * 2] * 0.55], v * 4);
+    g.setAttribute('color', new THREE.BufferAttribute(col, 4));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      transparent: true,
+      roughness: 0.5,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1.5,
+      polygonOffsetUnits: -1.5,
+    });
+    const m = new THREE.Mesh(g, mat);
+    m.receiveShadow = true;
+    m.renderOrder = 1;
+    this.group.add(m);
   }
 
   private buildMarkings(): void {

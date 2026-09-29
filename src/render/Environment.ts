@@ -164,6 +164,8 @@ export class Environment {
   readonly sunDirection = new THREE.Vector3();
   readonly group = new THREE.Group();
   private envMap: THREE.Texture | null = null;
+  /** Environment captured from the real scene (track, stands, lights) for car reflections. */
+  sceneEnv: THREE.Texture | null = null;
   private shadowExtent = 70;
 
   constructor(
@@ -242,6 +244,22 @@ export class Environment {
     this.sun.shadow.mapSize.set(size, size);
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
+  }
+
+  /**
+   * Renders the finished scene into a cube map from `pos` and prefilters it, so glossy car
+   * paint reflects the actual grandstands, trees and floodlights instead of just the sky.
+   */
+  captureScene(pos: THREE.Vector3, size: number): void {
+    const rt = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType });
+    const cam = new THREE.CubeCamera(0.5, 4000, rt);
+    cam.position.copy(pos);
+    cam.update(this.renderer, this.scene);
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.sceneEnv?.dispose();
+    this.sceneEnv = pmrem.fromCubemap(rt.texture).texture;
+    pmrem.dispose();
+    rt.dispose();
   }
 
   /** Renders the sky into a PMREM environment map used for reflections and IBL. */
@@ -357,6 +375,7 @@ export class Environment {
 
   dispose(): void {
     this.envMap?.dispose();
+    this.sceneEnv?.dispose();
     this.scene.remove(this.group);
     this.sun.shadow.map?.dispose();
     this.group.traverse((o) => {

@@ -24,7 +24,7 @@ import { RaceHUD } from '../ui/RaceHUD';
 import { ResultsScreen } from '../ui/ResultsScreen';
 import { Countdown, Toast, LoadingScreen } from '../ui/Overlay';
 import { clamp } from '../core/math';
-import { isTouchDevice } from '../core/device';
+import { detailProfile, isTouchDevice } from '../core/device';
 import { TouchControls } from '../ui/TouchControls';
 
 const MAX_STEPS_PER_FRAME = 12;
@@ -206,7 +206,7 @@ export class Game {
     this.applyTimeOfDay();
     void this.touch?.setSteering(s.touchSteering);
     this.renderer.setQuality(s.quality);
-    this.env.setShadowQuality(s.quality === 'low' ? 1024 : 2048);
+    this.env.setShadowQuality(Math.min(detailProfile().shadowMapSize, s.quality === 'low' ? 1024 : 2048));
     this.env.setShadowExtent(s.quality === 'high' ? 80 : 60);
     this.audio.setVolume(s.volume);
     this.hud.showFps = s.showFps;
@@ -291,6 +291,12 @@ export class Game {
     });
     r.compile(this.scene, this.camera);
     // One full render (all objects, shadow pass included) forces every buffer upload.
+    if (!this.env.sceneEnv) {
+      const p = this.trackScene.track.offsetPoint(40, 0, new THREE.Vector3());
+      p.y += 3;
+      this.env.captureScene(p, this.isTouch ? 128 : 256);
+    }
+    this.session?.setEnvMap(this.env.sceneEnv, this.env.preset.envIntensity);
     this.renderer.render(0, 0);
     for (const o of culled) o.frustumCulled = true;
   }

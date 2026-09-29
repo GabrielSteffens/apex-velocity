@@ -9,6 +9,7 @@ import { mergeByMaterial } from '../render/merge';
 import { buildRibbon } from './TrackMeshData';
 import { Vegetation } from './Vegetation';
 import { Trackside } from './Trackside';
+import { Venue } from './Venue';
 
 export { windUniform } from './Vegetation';
 
@@ -40,6 +41,7 @@ export class TrackScenery {
   private poolMat!: THREE.MeshBasicMaterial;
   private rnd: Random;
   readonly vegetation: Vegetation;
+  readonly venue: Venue;
 
   constructor(
     readonly track: TrackGeometry,
@@ -49,10 +51,16 @@ export class TrackScenery {
   ) {
     this.group.name = 'scenery';
     this.rnd = new Random(track.def.scenery.seed);
-    this.vegetation = new Vegetation(track, terrain, (x, z) => this.inComplex(x, z) || this.inLake(x, z), track.def.scenery.seed, track.def.scenery.treeCount);
+    this.venue = new Venue(track, terrain, layout, track.def.scenery.seed + 17);
+    this.vegetation = new Vegetation(
+      track,
+      terrain,
+      (x, z) => this.inComplex(x, z) || this.inLake(x, z) || this.venue.blocked(x, z),
+      track.def.scenery.seed,
+      track.def.scenery.treeCount,
+    );
     this.buildRocks();
     this.buildPitBuilding();
-    this.buildGrandstand();
     this.buildGantry();
     this.buildBridge();
     this.buildBillboards();
@@ -60,9 +68,10 @@ export class TrackScenery {
     this.buildFloodlights();
     this.buildLake();
     this.group.add(new Trackside(track, terrain, layout, track.def.scenery.seed + 9).group);
+    this.group.add(this.venue.group);
     // Collapse the hundreds of static prop meshes into one draw call per material.
     this.atlasSigns();
-    mergeByMaterial(this.group, new Set(), 400);
+    mergeByMaterial(this.group, this.venue.animated, 400);
     this.group.add(this.vegetation.group);
   }
 
@@ -224,62 +233,6 @@ export class TrackScenery {
     signPole.position.set(7.6, 11.5, 0);
     g.add(signPole);
 
-    g.traverse((o) => {
-      if (o instanceof THREE.Mesh) {
-        o.castShadow = true;
-        o.receiveShadow = true;
-      }
-    });
-    this.group.add(g);
-  }
-
-  private buildGrandstand(): void {
-    const bo = this.track.def.barrierOffset;
-    const f = this.frameAt(-40, -(bo + 16));
-    const g = new THREE.Group();
-    g.position.copy(f.pos);
-    g.rotation.y = f.tangentYaw;
-    // Grandstand is on the left (-lateral) side; the track is on its local -X side.
-    const length = 150;
-    const steps = 12;
-    const crowd = new THREE.MeshStandardMaterial({ map: tex.crowdTexture(), roughness: 0.9 });
-    crowd.map!.repeat.set(length / 25, 1);
-    const concreteM = new THREE.MeshStandardMaterial({ color: 0xbfbab0, roughness: 0.85 });
-    const seatColors = [0x1f6fe0, 0xd81e2c];
-    for (let i = 0; i < steps; i++) {
-      const tread = new THREE.Mesh(
-        new THREE.BoxGeometry(1.9, 0.8 + i * 0.8, length),
-        [concreteM, crowd, crowd, concreteM, concreteM, concreteM],
-      );
-      tread.position.set(-12 + i * 1.9, (0.8 + i * 0.8) / 2, 0);
-      g.add(tread);
-      if (i % 3 === 0) {
-        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, length), new THREE.MeshStandardMaterial({ color: seatColors[(i / 3) % 2], roughness: 0.4 }));
-        rail.position.set(-12.9 + i * 1.9, 1.2 + i * 0.8, 0);
-        g.add(rail);
-      }
-    }
-    const back = new THREE.Mesh(new THREE.BoxGeometry(0.6, 14, length), concreteM);
-    back.position.set(-12 + steps * 1.9, 7, 0);
-    g.add(back);
-    // Cantilever roof
-    const roofMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.4, metalness: 0.3 });
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(26, 0.5, length + 6), roofMat);
-    roof.position.set(-1 + steps * 0.4, 16.5, 0);
-    roof.rotation.z = -0.08;
-    g.add(roof);
-    const colMat = new THREE.MeshStandardMaterial({ color: 0x3b3f45, metalness: 0.6, roughness: 0.4 });
-    for (let k = -3; k <= 3; k++) {
-      const col = new THREE.Mesh(new THREE.BoxGeometry(0.6, 16, 0.6), colMat);
-      col.position.set(-12 + steps * 1.9 - 0.8, 8, k * (length / 7));
-      g.add(col);
-    }
-    // Sponsor fascia on the roof edge
-    const fasciaTex = tex.signTexture({ text: 'APEX VELOCITY', sub: 'GRAND PRIX · VALLE DORADO', bg: '#d81e2c', fg: '#fff', w: 1024, h: 128 });
-    const fascia = new THREE.Mesh(new THREE.PlaneGeometry(length, 3), new THREE.MeshStandardMaterial({ map: fasciaTex, roughness: 0.5 }));
-    fascia.position.set(-14.5 + steps * 0.4 - 0.5, 15.8, 0);
-    fascia.rotation.y = -Math.PI / 2;
-    g.add(fascia);
     g.traverse((o) => {
       if (o instanceof THREE.Mesh) {
         o.castShadow = true;
@@ -457,6 +410,7 @@ export class TrackScenery {
 
   /** Per-frame animation of scenery (water ripples). */
   update(time: number): void {
+    this.venue.update(time);
     if (this.waterMat?.normalMap) this.waterMat.normalMap.offset.set(time * 0.012, time * 0.007);
   }
 
